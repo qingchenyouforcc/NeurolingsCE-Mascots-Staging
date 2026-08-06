@@ -35,15 +35,41 @@
       "maxItems": 16,
       "items": { "$ref": "#/definitions/person" }
     },
+    "owner": {
+      "type": "object",
+      "required": ["userId", "login"],
+      "description": "Owner identity. userId is the numeric GitHub user id "
+        "and the permission basis; login is display-only. When the owner "
+        "numeric id also appears in maintainerUserIds, owner.login must equal "
+        "the maintainer login at the matching index.",
+      "properties": {
+        "userId": { "type": "string", "pattern": "^[0-9]{1,20}$" },
+        "login": { "type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$", "maxLength": 39 }
+      },
+      "additionalProperties": false
+    },
     "maintainers": {
       "type": "array",
       "minItems": 1,
       "maxItems": 16,
+      "description": "Display-only GitHub logins. Entry i corresponds by "
+        "index to maintainerUserIds[i]; permissions are decided only by the "
+        "numeric ids.",
       "items": {
         "type": "string",
         "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$",
         "maxLength": 39
       }
+    },
+    "maintainerUserIds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "description": "GitHub numeric user ids with update permission. Must "
+        "have exactly the same length and order as maintainers (index i is "
+        "the login of maintainerUserIds[i]).",
+      "items": { "type": "string", "pattern": "^[0-9]{1,20}$" }
     },
     "license": { "type": "string", "pattern": "^[A-Za-z0-9.+-]+$", "maxLength": 64 },
     "upstream": { "type": "string", "maxLength": 2000 },
@@ -57,7 +83,11 @@
     "package": { "$ref": "#/definitions/package" },
     "tags": { "type": "array", "maxItems": 32, "items": { "type": "string", "maxLength": 40 }, "uniqueItems": true },
     "categories": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 40 }, "uniqueItems": true },
-    "status": { "enum": ["published", "draft"] },
+    "status": {
+      "enum": ["published", "draft"],
+      "description": "Deprecated derived state; the GitHub Release is the single source of truth. New manifests should omit it."
+    },
+    "submissionId": { "type": "string", "pattern": "^[0-9a-f]{24}$" },
     "createdAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" },
     "release": {
@@ -66,7 +96,7 @@
       "properties": {
         "releaseId": { "type": "integer", "minimum": 1 },
         "assetId": { "type": "integer", "minimum": 1 },
-        "tag": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "maxLength": 100 }
+        "tag": { "type": "string", "pattern": "^[A-Za-z0-9._+/-]+$", "maxLength": 100 }
       },
       "additionalProperties": false
     }
@@ -75,8 +105,12 @@
     "person": {
       "type": "object",
       "required": ["githubLogin", "displayName"],
+      "description": "Author entry. When githubUserId is present and the "
+        "numeric id also appears in maintainerUserIds or owner.userId, the "
+        "githubLogin must equal the corresponding maintainer/owner login.",
       "properties": {
         "githubLogin": { "type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$", "maxLength": 39 },
+        "githubUserId": { "type": "string", "pattern": "^[0-9]{1,20}$" },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 120 }
       },
       "additionalProperties": true

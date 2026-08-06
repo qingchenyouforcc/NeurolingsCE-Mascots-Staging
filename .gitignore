@@ -2,5 +2,9 @@ __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
+*.pem
+*.key
+.env
+.env.*
 submission-service/data/
 generated/index-v1.json

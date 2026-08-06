@@ -3,7 +3,8 @@
 ## GitHub App 私钥
 
 1. 在 GitHub App 设置中生成新私钥。
-2. 更新服务端 Secret `GITHUB_APP_PRIVATE_KEY`。
+2. 更新服务端 Secret `GITHUB_PUBLISHER_PRIVATE_KEY_PATH` 指向的新 PEM 文件
+   （Login App 无私钥；只轮换 Publisher App 私钥）。
 3. 部署后验证 `/healthz` 与一次测试投稿。
 4. 确认新私钥工作后删除旧私钥。
 
