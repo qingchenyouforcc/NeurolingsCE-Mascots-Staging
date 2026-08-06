@@ -14,34 +14,26 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == false
     steps:
-      # TODO(maintainers): pin third-party actions to full commit SHAs before enabling.
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
       - name: Clean up draft releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_OWNER: qingchenyouforcc
-          GH_REPO: NeurolingsCE-Mascots
+          GH_OWNER: ${{ vars.REGISTRY_OWNER || 'qingchenyouforcc' }}
+          GH_REPO: ${{ vars.REGISTRY_REPO || 'NeurolingsCE-Mascots' }}
+          GH_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           python3 - <<'PY'
           import json, os, sys
           sys.path.insert(0, "tools")
-          from pathlib import Path
           from workflow_helpers import (
-              changed_manifest_paths,
-              delete_release,
-              load_manifest,
+              verify_and_cleanup_submission_pr,
           )
-          token = os.environ["GH_TOKEN"]
-          owner = os.environ["GH_OWNER"]
-          repo = os.environ["GH_REPO"]
-          for manifest_path in changed_manifest_paths(Path(".")):
-              manifest = load_manifest(manifest_path)
-              meta = manifest.get("release") or {}
-              release_id = meta.get("releaseId")
-              if not release_id:
-                  continue
-              delete_release(token, owner, repo, int(release_id))
-              print(f"Deleted draft release {release_id} for {manifest.get('id', '?')}")
+          result = verify_and_cleanup_submission_pr(
+              token=os.environ["GH_TOKEN"],
+              owner=os.environ["GH_OWNER"],
+              repo=os.environ["GH_REPO"],
+              pr_number=int(os.environ["GH_PR_NUMBER"]),
+          )
+          print(json.dumps(result, sort_keys=True))
+          if not result.get("verified"):
+              print(f"::warning::cleanup skipped: {result.get('reason', 'unverified')}")
           PY

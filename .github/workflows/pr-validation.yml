@@ -10,11 +10,12 @@ permissions:
 
 jobs:
   registry-checks:
-    name: Registry / schema / duplicate checks
+    name: Registry / schema / duplicate checks (trusted base)
     runs-on: ubuntu-latest
     steps:
-      # TODO(maintainers): pin third-party actions to full commit SHAs before enabling.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
       - name: Validate registry
         run: python3 tools/validate_registry.py . --json
       - name: Registry unit tests
@@ -31,63 +32,97 @@ jobs:
     name: Package safety validation with public CLI validator
     runs-on: ubuntu-latest
     steps:
-      # TODO(maintainers): pin third-party actions to full commit SHAs before enabling.
-      - uses: actions/checkout@v4
+      # Trusted tools only: checkout the BASE commit, never the PR head.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - name: Extract changed manifest metadata
-        id: metadata
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Verify changed files and download draft asset (API only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_OWNER: ${{ vars.REGISTRY_OWNER || 'qingchenyouforcc' }}
+          GH_REPO: ${{ vars.REGISTRY_REPO || 'NeurolingsCE-Mascots' }}
+          GH_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           python3 - <<'PY'
-          import json, sys
-          sys.path.insert(0, "tools")
+          import json, os, sys
           from pathlib import Path
-          from workflow_helpers import changed_manifest_paths, load_manifest
-          paths = changed_manifest_paths(Path("."))
-          if not paths:
-              print("::notice::no changed manifests")
-              sys.exit(0)
-          manifests = [load_manifest(p) for p in paths]
-          package = manifests[0].get("package", {})
-          url = package.get("url", "")
-          sha = package.get("sha256", "")
-          print(json.dumps({"url": url, "sha256": sha}))
-          with open("/tmp/manifest-url.json", "w", encoding="utf-8") as f:
-              json.dump({"url": url, "sha256": sha}, f)
+          sys.path.insert(0, "tools")
+          from workflow_helpers import verify_pr_manifest_and_download_asset
+          result = verify_pr_manifest_and_download_asset(
+              token=os.environ["GH_TOKEN"],
+              owner=os.environ["GH_OWNER"],
+              repo=os.environ["GH_REPO"],
+              pr_number=int(os.environ["GH_PR_NUMBER"]),
+              dest_dir=Path("/tmp"),
+          )
+          Path("/tmp/package.mascot").write_bytes(
+              Path(result["assetPath"]).read_bytes()
+          )
+          Path("/tmp/manifest.json").write_text(
+              json.dumps(result["manifest"], sort_keys=True), encoding="utf-8"
+          )
+          trace = dict(result["apiTrace"])
+          trace.update({
+              "runId": os.environ.get("GITHUB_RUN_ID", ""),
+              "workflowEvent": os.environ.get("GITHUB_EVENT_NAME", ""),
+              "jobPermissions": "contents: read, pull-requests: read",
+              "owner": os.environ["GH_OWNER"],
+              "repo": os.environ["GH_REPO"],
+              "prNumber": int(os.environ["GH_PR_NUMBER"]),
+          })
+          Path("/tmp/api-trace.json").write_text(
+              json.dumps(trace, sort_keys=True), encoding="utf-8"
+          )
+          print(json.dumps({
+              "mascotId": result["mascotId"],
+              "version": result["version"],
+              "submissionId": result["submissionId"],
+              "releaseId": result["releaseId"],
+              "assetId": result["assetId"],
+              "tag": result["tag"],
+              "apiTrace": result["apiTrace"],
+          }, sort_keys=True))
           PY
-      - name: Download package asset and verify SHA-256
+      - name: Record E2E API trace (sanitized, no credentials)
         run: |
           python3 - <<'PY'
-          import json, sys
-          sys.path.insert(0, "tools")
+          import json
           from pathlib import Path
-          from workflow_helpers import safe_download
-          meta = json.loads(Path("/tmp/manifest-url.json").read_text(encoding="utf-8"))
-          if not meta["url"]:
-              print("::notice::no package URL to validate")
-              sys.exit(0)
-          token = "${{ secrets.GITHUB_TOKEN }}"
-          safe_download(meta["url"], token, Path("/tmp/package.mascot"), meta["sha256"])
+          trace_path = Path("/tmp/api-trace.json")
+          if not trace_path.exists():
+              print("::error::api trace was not produced")
+              raise SystemExit(1)
+          trace = json.loads(trace_path.read_text(encoding="utf-8"))
+          assert "Authorization" not in trace_path.read_text(encoding="utf-8")
+          print("apiTrace=" + json.dumps(trace, sort_keys=True))
           PY
-      - name: Build public validator from NeuolingsCE
+      - name: Build public validator from NeurolingsCE
         run: |
-          git clone --depth 1 https://github.com/qingchenyouforcc/NeurolingsCE.git /tmp/neurolingsce
+          git clone --depth 1 \
+            https://github.com/${{ vars.VALIDATOR_REPO || 'qingchenyouforcc/NeurolingsCE' }}.git \
+            /tmp/neurolingsce
           sudo apt-get update -qq
           sudo apt-get install -y -qq qt6-base-dev ninja-build
           cmake -S /tmp/neurolingsce -B /tmp/neurolingsce-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/neurolingsce-build --target NeurolingsCECli --parallel 2
-      - name: Validate package with CLI
+      - name: Validate package with trusted CLI
         run: |
           python3 - <<'PY'
           import json, sys
           from pathlib import Path
-          if not Path("/tmp/package.mascot").exists():
-              sys.exit(0)
           sys.path.insert(0, "tools")
           from workflow_helpers import cli_validate
-          ok, report = cli_validate(Path("/tmp/neurolingsce-build/bin/NeurolingsCE-cli"), Path("/tmp/package.mascot"))
+          package = Path("/tmp/package.mascot")
+          if not package.exists():
+              print("::error::draft asset was not downloaded")
+              sys.exit(1)
+          ok, report = cli_validate(
+              Path("/tmp/neurolingsce-build/bin/NeurolingsCE-cli"), package
+          )
           print(json.dumps(report, sort_keys=True))
+          package.unlink(missing_ok=True)
+          Path("/tmp/manifest.json").unlink(missing_ok=True)
           if not ok:
               sys.exit(1)
           PY
