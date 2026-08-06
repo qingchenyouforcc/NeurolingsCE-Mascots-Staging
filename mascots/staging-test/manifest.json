@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1",
+  "id": "staging-test",
+  "name": "Staging Test",
+  "version": "0.1.0",
+  "summary": "Synthetic staging fixture",
+  "description": "Copyright-free synthetic mascot used for the staging E2E.",
+  "authors": [
+    {
+      "githubLogin": "qingchenyouforcc",
+      "githubUserId": "90140161",
+      "displayName": "Qingchen You"
+    }
+  ],
+  "maintainers": ["qingchenyouforcc"],
+  "maintainerUserIds": ["90140161"],
+  "owner": {"userId": "90140161", "login": "qingchenyouforcc"},
+  "license": "MIT",
+  "isDerivative": false,
+  "minimumNeurolingsCEVersion": "0.5.1",
+  "package": {
+    "fileName": "staging-test.mascot",
+    "url": "https://github.com/qingchenyouforcc/NeurolingsCE-Mascots-Staging/releases/download/draft/staging-test-0.1.0/staging-test.mascot",
+    "size": 655,
+    "sha256": "f8d04c3cf502762f23bbe9fee3d1ea740b44eb308fb376bb8263e9e23c71fb59",
+    "contentType": "application/octet-stream"
+  },
+  "tags": ["staging"],
+  "categories": ["test"],
+  "createdAt": "2026-08-07T00:00:00Z",
+  "updatedAt": "2026-08-07T00:00:00Z",
+  "release": {
+    "releaseId": 366355280,
+    "assetId": 504150838,
+    "tag": "draft/staging-test-0.1.0"
+  },
+  "submissionId": "aaaaaaaaaaaaaaaaaaaaaaaa"
+}
