@@ -1,0 +1,108 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/qingchenyouforcc/NeurolingsCE-Mascots/blob/main/schemas/mascot-manifest-v1.schema.json",
+  "title": "NeurolingsCE Mascot Manifest v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "version",
+    "summary",
+    "description",
+    "authors",
+    "maintainers",
+    "license",
+    "minimumNeurolingsCEVersion",
+    "package",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 64 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+    },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 20000 },
+    "authors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": { "$ref": "#/definitions/person" }
+    },
+    "maintainers": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$",
+        "maxLength": 39
+      }
+    },
+    "license": { "type": "string", "pattern": "^[A-Za-z0-9.+-]+$", "maxLength": 64 },
+    "upstream": { "type": "string", "maxLength": 2000 },
+    "isDerivative": { "type": "boolean" },
+    "minimumNeurolingsCEVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+    },
+    "icon": { "$ref": "#/definitions/asset" },
+    "previews": { "type": "array", "maxItems": 16, "items": { "$ref": "#/definitions/asset" } },
+    "package": { "$ref": "#/definitions/package" },
+    "tags": { "type": "array", "maxItems": 32, "items": { "type": "string", "maxLength": 40 }, "uniqueItems": true },
+    "categories": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 40 }, "uniqueItems": true },
+    "status": { "enum": ["published", "draft"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "release": {
+      "type": "object",
+      "required": ["releaseId", "assetId", "tag"],
+      "properties": {
+        "releaseId": { "type": "integer", "minimum": 1 },
+        "assetId": { "type": "integer", "minimum": 1 },
+        "tag": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "maxLength": 100 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "definitions": {
+    "person": {
+      "type": "object",
+      "required": ["githubLogin", "displayName"],
+      "properties": {
+        "githubLogin": { "type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$", "maxLength": 39 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 }
+      },
+      "additionalProperties": true
+    },
+    "asset": {
+      "type": "object",
+      "required": ["fileName", "url", "size", "sha256"],
+      "properties": {
+        "fileName": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "size": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": true
+    },
+    "package": {
+      "type": "object",
+      "required": ["fileName", "url", "size", "sha256"],
+      "properties": {
+        "fileName": { "type": "string", "pattern": "^[A-Za-z0-9._-]+\\.mascot$", "maxLength": 255 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "size": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "contentType": { "type": "string", "maxLength": 100 }
+      },
+      "additionalProperties": true
+    }
+  }
+}

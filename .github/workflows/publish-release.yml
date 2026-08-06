@@ -1,0 +1,56 @@
+name: Publish mascot releases
+
+on:
+  push:
+    branches: [main]
+    paths: ["mascots/**"]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish draft releases and re-verify SHA-256
+    runs-on: ubuntu-latest
+    steps:
+      # TODO(maintainers): pin third-party actions to full commit SHAs before enabling.
+      - uses: actions/checkout@v4
+      - name: Validate registry before publishing
+        run: python3 tools/validate_registry.py . --json
+      - name: Publish drafts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_OWNER: qingchenyouforcc
+          GH_REPO: NeurolingsCE-Mascots
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, "tools")
+          from pathlib import Path
+          from workflow_helpers import (
+              changed_manifest_paths,
+              delete_release,
+              load_manifest,
+              publish_release,
+              safe_download,
+          )
+          token = os.environ["GH_TOKEN"]
+          owner = os.environ["GH_OWNER"]
+          repo = os.environ["GH_REPO"]
+          release = os.environ.get("GH_RELEASE_ID")
+          manifests = changed_manifest_paths(Path("."))
+          if not manifests:
+              sys.exit(0)
+          for manifest_path in manifests:
+              manifest = load_manifest(manifest_path)
+              meta = manifest.get("release") or {}
+              release_id = meta.get("releaseId") or release
+              if not release_id:
+                  print(f"::warning::{manifest_path} has no release metadata; skipping")
+                  continue
+              package = manifest.get("package", {})
+              tmp = Path(f"/tmp/verify-{manifest['id']}.mascot")
+              safe_download(package["url"], token, tmp, package["sha256"])
+              publish_release(token, owner, repo, int(release_id))
+              print(f"Published {manifest['id']} {manifest['version']} (release {release_id})")
+          PY

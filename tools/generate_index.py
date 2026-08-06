@@ -1,0 +1,89 @@
+"""Generate generated/index-v1.json deterministically from the registry.
+
+Same input produces byte-identical output: entries are sorted by id and
+json.dumps uses sorted keys with stable separators.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from registry_checks import iter_manifest_paths, load_index_entry, load_manifest  # noqa: E402
+from validate_registry import main as validate_main  # noqa: E402
+
+
+DEFAULT_REGISTRY = "qingchenyouforcc/NeurolingsCE-Mascots"
+
+
+def build_index(root: Path, generated_at: str, registry: str) -> dict:
+    mascots = []
+    for _directory_name, manifest_path in iter_manifest_paths(root):
+        manifest, manifest_errors = load_manifest(manifest_path)
+        if manifest_errors:
+            raise ValueError(f"{manifest_path}: {manifest_errors[0]}")
+        if manifest.get("status") == "draft":
+            continue
+        mascots.append(load_index_entry(manifest))
+    mascots.sort(key=lambda item: item["id"])
+    return {
+        "schemaVersion": 1,
+        "generatedAt": generated_at,
+        "registry": registry,
+        "mascots": mascots,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("root", nargs="?", default=".", help="registry root")
+    parser.add_argument(
+        "--output",
+        default="generated/index-v1.json",
+        help="output path (default: generated/index-v1.json)",
+    )
+    parser.add_argument(
+        "--registry", default=DEFAULT_REGISTRY, help="registry slug for the index"
+    )
+    parser.add_argument(
+        "--generated-at",
+        default=None,
+        help="ISO-8601 timestamp; default is current UTC time",
+    )
+    args = parser.parse_args()
+
+    root = Path(args.root).resolve()
+    if validate_main_with_args([str(root)]):
+        print("Registry validation failed; refusing to generate an index", file=sys.stderr)
+        return 1
+    generated_at = args.generated_at or datetime.now(timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    index = build_index(root, generated_at, args.registry)
+    output = Path(args.output)
+    if not output.is_absolute():
+        output = root / output
+    output.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(index, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    output.write_text(text, encoding="utf-8")
+    print(f"Wrote {output}")
+    return 0
+
+
+def validate_main_with_args(argv: list[str]) -> int:
+    """Run the registry validator in-process (no subprocess)."""
+    old_argv = sys.argv
+    try:
+        sys.argv = ["validate_registry.py", *argv]
+        return validate_main()
+    finally:
+        sys.argv = old_argv
+
+
+if __name__ == "__main__":
+    sys.exit(main())

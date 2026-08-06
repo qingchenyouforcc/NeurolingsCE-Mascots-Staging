@@ -1,0 +1,93 @@
+name: PR validation
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  registry-checks:
+    name: Registry / schema / duplicate checks
+    runs-on: ubuntu-latest
+    steps:
+      # TODO(maintainers): pin third-party actions to full commit SHAs before enabling.
+      - uses: actions/checkout@v4
+      - name: Validate registry
+        run: python3 tools/validate_registry.py . --json
+      - name: Registry unit tests
+        run: python3 -m unittest discover -s tools/tests -p "test_*.py"
+      - name: Deterministic index generation
+        run: |
+          python3 tools/generate_index.py . --generated-at 2026-01-01T00:00:00Z \
+            --output /tmp/index-first.json
+          python3 tools/generate_index.py . --generated-at 2026-01-01T00:00:00Z \
+            --output /tmp/index-second.json
+          diff -u /tmp/index-first.json /tmp/index-second.json
+
+  package-validation:
+    name: Package safety validation with public CLI validator
+    runs-on: ubuntu-latest
+    steps:
+      # TODO(maintainers): pin third-party actions to full commit SHAs before enabling.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Extract changed manifest metadata
+        id: metadata
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          sys.path.insert(0, "tools")
+          from pathlib import Path
+          from workflow_helpers import changed_manifest_paths, load_manifest
+          paths = changed_manifest_paths(Path("."))
+          if not paths:
+              print("::notice::no changed manifests")
+              sys.exit(0)
+          manifests = [load_manifest(p) for p in paths]
+          package = manifests[0].get("package", {})
+          url = package.get("url", "")
+          sha = package.get("sha256", "")
+          print(json.dumps({"url": url, "sha256": sha}))
+          with open("/tmp/manifest-url.json", "w", encoding="utf-8") as f:
+              json.dump({"url": url, "sha256": sha}, f)
+          PY
+      - name: Download package asset and verify SHA-256
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          sys.path.insert(0, "tools")
+          from pathlib import Path
+          from workflow_helpers import safe_download
+          meta = json.loads(Path("/tmp/manifest-url.json").read_text(encoding="utf-8"))
+          if not meta["url"]:
+              print("::notice::no package URL to validate")
+              sys.exit(0)
+          token = "${{ secrets.GITHUB_TOKEN }}"
+          safe_download(meta["url"], token, Path("/tmp/package.mascot"), meta["sha256"])
+          PY
+      - name: Build public validator from NeuolingsCE
+        run: |
+          git clone --depth 1 https://github.com/qingchenyouforcc/NeurolingsCE.git /tmp/neurolingsce
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qt6-base-dev ninja-build
+          cmake -S /tmp/neurolingsce -B /tmp/neurolingsce-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/neurolingsce-build --target NeurolingsCECli --parallel 2
+      - name: Validate package with CLI
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          from pathlib import Path
+          if not Path("/tmp/package.mascot").exists():
+              sys.exit(0)
+          sys.path.insert(0, "tools")
+          from workflow_helpers import cli_validate
+          ok, report = cli_validate(Path("/tmp/neurolingsce-build/bin/NeurolingsCE-cli"), Path("/tmp/package.mascot"))
+          print(json.dumps(report, sort_keys=True))
+          if not ok:
+              sys.exit(1)
+          PY

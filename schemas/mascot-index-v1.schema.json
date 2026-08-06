@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/qingchenyouforcc/NeurolingsCE-Mascots/blob/main/schemas/mascot-index-v1.schema.json",
+  "title": "NeurolingsCE Mascot Index v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "registry", "mascots"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "registry": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "mascots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "version",
+          "summary",
+          "authors",
+          "maintainers",
+          "license",
+          "minimumNeurolingsCEVersion",
+          "download",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "version": { "type": "string" },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "authors": { "type": "array", "items": { "type": "string" } },
+          "maintainers": { "type": "array", "items": { "type": "string" } },
+          "license": { "type": "string" },
+          "minimumNeurolingsCEVersion": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "categories": { "type": "array", "items": { "type": "string" } },
+          "download": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "size", "sha256"],
+            "properties": {
+              "url": { "type": "string", "minLength": 1 },
+              "size": { "type": "integer", "minimum": 1 },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          },
+          "icon": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "size", "sha256"],
+            "properties": {
+              "url": { "type": "string", "minLength": 1 },
+              "size": { "type": "integer", "minimum": 0 },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          },
+          "previews": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["url", "size", "sha256"],
+              "properties": {
+                "url": { "type": "string", "minLength": 1 },
+                "size": { "type": "integer", "minimum": 0 },
+                "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              }
+            }
+          },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}

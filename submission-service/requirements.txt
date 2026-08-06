@@ -1,0 +1,4 @@
+# Production deployment should install cryptography for GitHub App JWT
+# RS256 signing (Apache-2.0 / BSD dual licensed). Without it, the service
+# falls back to a system `openssl` binary.
+cryptography>=42.0

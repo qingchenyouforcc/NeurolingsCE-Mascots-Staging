@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "1",
+  "id": "sample",
+  "name": "Sample Mascot",
+  "version": "1.0.0",
+  "summary": "Example manifest showing the required fields.",
+  "description": "This file lives under examples/ and is NOT part of the registry. Copy it to mascots/<id>/manifest.json for real submissions and replace every placeholder.",
+  "authors": [
+    { "githubLogin": "octocat", "displayName": "Octo Cat" }
+  ],
+  "maintainers": ["octocat"],
+  "license": "MIT",
+  "isDerivative": false,
+  "upstream": "",
+  "minimumNeurolingsCEVersion": "0.5.1",
+  "package": {
+    "fileName": "sample.mascot",
+    "url": "https://github.com/qingchenyouforcc/NeurolingsCE-Mascots/releases/download/v1.0.0/sample.mascot",
+    "size": 1,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "contentType": "application/octet-stream"
+  },
+  "tags": ["example"],
+  "categories": ["example"],
+  "createdAt": "2026-08-06T00:00:00Z",
+  "updatedAt": "2026-08-06T00:00:00Z"
+}
