@@ -110,6 +110,121 @@ class RegistryToolsTest(unittest.TestCase):
         errors = validate_registry(self.root)
         self.assertTrue(any("fileName" in e for e in errors))
 
+    def test_accepts_owner_and_maintainer_user_ids(self):
+        manifest = valid_manifest()
+        manifest["owner"] = {"userId": "42", "login": "octocat"}
+        manifest["maintainerUserIds"] = ["42"]
+        manifest["authors"][0]["githubUserId"] = "42"
+        write_manifest(self.root, "sample", manifest)
+        self.assertEqual(validate_registry(self.root), [])
+
+    def test_rejects_maintainer_ids_length_mismatch(self):
+        manifest = valid_manifest()
+        manifest["owner"] = {"userId": "42", "login": "octocat"}
+        manifest["maintainerUserIds"] = ["42", "43"]
+        manifest["authors"][0]["githubUserId"] = "42"
+        write_manifest(self.root, "sample", manifest)
+        errors = validate_registry(self.root)
+        self.assertTrue(any("maintainerUserIds length" in e for e in errors))
+
+    def test_rejects_invalid_owner_user_id(self):
+        manifest = valid_manifest()
+        manifest["owner"] = {"userId": "../42", "login": "octocat"}
+        manifest["maintainerUserIds"] = ["42"]
+        manifest["authors"][0]["githubUserId"] = "42"
+        write_manifest(self.root, "sample", manifest)
+        errors = validate_registry(self.root)
+        self.assertTrue(any("owner.userId" in e for e in errors))
+
+    def test_rejects_new_format_without_author_user_id(self):
+        manifest = valid_manifest()
+        manifest["owner"] = {"userId": "42", "login": "octocat"}
+        manifest["maintainerUserIds"] = ["42"]
+        write_manifest(self.root, "sample", manifest)
+        errors = validate_registry(self.root)
+        self.assertTrue(any("githubUserId is required" in e for e in errors))
+
+    def test_rejects_duplicate_maintainer_ids(self):
+        manifest = valid_manifest()
+        manifest["owner"] = {"userId": "42", "login": "octocat"}
+        manifest["maintainerUserIds"] = ["42", "42"]
+        manifest["maintainers"] = ["octocat", "octocat"]
+        manifest["authors"][0]["githubUserId"] = "42"
+        write_manifest(self.root, "sample", manifest)
+        errors = validate_registry(self.root)
+        self.assertTrue(any("maintainerUserIds must be unique" in e for e in errors))
+
+    def test_rejects_owner_login_mismatch_with_maintainer(self):
+        manifest = valid_manifest()
+        manifest["owner"] = {"userId": "42", "login": "other"}
+        manifest["maintainerUserIds"] = ["42"]
+        manifest["maintainers"] = ["octocat"]
+        manifest["authors"][0]["githubUserId"] = "42"
+        write_manifest(self.root, "sample", manifest)
+        errors = validate_registry(self.root)
+        self.assertTrue(
+            any("owner.login must match maintainers[0]" in e for e in errors)
+        )
+
+    def test_rejects_author_login_mismatch_with_maintainer(self):
+        manifest = valid_manifest()
+        manifest["owner"] = {"userId": "42", "login": "octocat"}
+        manifest["maintainerUserIds"] = ["42", "43"]
+        manifest["maintainers"] = ["octocat", "bob"]
+        manifest["authors"] = [
+            {
+                "githubLogin": "octocat",
+                "githubUserId": "42",
+                "displayName": "Octo Cat",
+            },
+            {
+                "githubLogin": "alice",
+                "githubUserId": "43",
+                "displayName": "Alice",
+            },
+        ]
+        write_manifest(self.root, "sample", manifest)
+        errors = validate_registry(self.root)
+        self.assertTrue(
+            any("authors[1].githubLogin must match maintainers[1]" in e for e in errors)
+        )
+
+    def test_rejects_author_login_mismatch_with_owner(self):
+        manifest = valid_manifest()
+        manifest["owner"] = {"userId": "42", "login": "octocat"}
+        manifest["maintainerUserIds"] = ["43"]
+        manifest["maintainers"] = ["bob"]
+        manifest["authors"] = [
+            {
+                "githubLogin": "renamed",
+                "githubUserId": "42",
+                "displayName": "Octo Cat",
+            },
+        ]
+        write_manifest(self.root, "sample", manifest)
+        errors = validate_registry(self.root)
+        self.assertTrue(
+            any("authors[0].githubLogin must match owner.login" in e for e in errors)
+        )
+
+    def test_accepts_consistent_renamed_logins(self):
+        manifest = valid_manifest()
+        manifest["owner"] = {"userId": "42", "login": "renamed"}
+        manifest["maintainerUserIds"] = ["42"]
+        manifest["maintainers"] = ["renamed"]
+        manifest["authors"][0] = {
+            "githubLogin": "renamed",
+            "githubUserId": "42",
+            "displayName": "Octo Cat",
+        }
+        write_manifest(self.root, "sample", manifest)
+        self.assertEqual(validate_registry(self.root), [])
+
+    def test_index_entry_has_derived_published_status(self):
+        write_manifest(self.root, "sample", valid_manifest())
+        index = build_index(self.root, "2026-08-06T00:00:00Z", "test/registry")
+        self.assertEqual(index["mascots"][0]["status"], "published")
+
     def test_index_is_deterministic_and_sorted(self):
         write_manifest(self.root, "zebra", valid_manifest(mid="zebra", version="2.0.0"))
         write_manifest(self.root, "alpha", valid_manifest(mid="alpha", version="1.0.0"))
@@ -130,6 +245,36 @@ class RegistryToolsTest(unittest.TestCase):
         write_manifest(self.root, "draft", draft)
         index = build_index(self.root, "2026-08-06T00:00:00Z", "test/registry")
         self.assertEqual([item["id"] for item in index["mascots"]], ["sample"])
+
+    def test_index_includes_manifest_when_release_published(self):
+        manifest = valid_manifest()
+        manifest["status"] = "draft"
+        manifest["release"] = {
+            "releaseId": 42,
+            "assetId": 7,
+            "tag": "draft/sample-1.2.3",
+        }
+        write_manifest(self.root, "sample", manifest)
+        index = build_index(
+            self.root, "2026-08-06T00:00:00Z", "test/registry",
+            published_tags={"draft/sample-1.2.3"},
+        )
+        self.assertEqual([item["id"] for item in index["mascots"]], ["sample"])
+
+    def test_index_excludes_unpublished_release(self):
+        manifest = valid_manifest()
+        manifest["status"] = "draft"
+        manifest["release"] = {
+            "releaseId": 42,
+            "assetId": 7,
+            "tag": "draft/sample-1.2.3",
+        }
+        write_manifest(self.root, "sample", manifest)
+        index = build_index(
+            self.root, "2026-08-06T00:00:00Z", "test/registry",
+            published_tags=set(),
+        )
+        self.assertEqual(index["mascots"], [])
 
     def test_index_authors_are_logins(self):
         write_manifest(self.root, "sample", valid_manifest())

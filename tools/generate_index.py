@@ -21,13 +21,25 @@ from validate_registry import main as validate_main  # noqa: E402
 DEFAULT_REGISTRY = "qingchenyouforcc/NeurolingsCE-Mascots"
 
 
-def build_index(root: Path, generated_at: str, registry: str) -> dict:
+def build_index(root: Path, generated_at: str, registry: str,
+                published_tags: set[str] | None = None) -> dict:
+    """Build the index deterministically.
+
+    When ``published_tags`` is provided, only manifests whose release tag is in
+    that set are included (published state is derived from the GitHub Releases
+    API, never persisted back into main). When it is None (local/offline runs),
+    the legacy behavior applies: manifests with status != "draft" are included.
+    """
     mascots = []
     for _directory_name, manifest_path in iter_manifest_paths(root):
         manifest, manifest_errors = load_manifest(manifest_path)
         if manifest_errors:
             raise ValueError(f"{manifest_path}: {manifest_errors[0]}")
-        if manifest.get("status") == "draft":
+        if published_tags is not None:
+            tag = (manifest.get("release") or {}).get("tag")
+            if not isinstance(tag, str) or tag not in published_tags:
+                continue
+        elif manifest.get("status") == "draft":
             continue
         mascots.append(load_index_entry(manifest))
     mascots.sort(key=lambda item: item["id"])
@@ -55,6 +67,11 @@ def main() -> int:
         default=None,
         help="ISO-8601 timestamp; default is current UTC time",
     )
+    parser.add_argument(
+        "--published-tags-file",
+        default=None,
+        help="JSON file with the list of published release tags",
+    )
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
@@ -64,7 +81,22 @@ def main() -> int:
     generated_at = args.generated_at or datetime.now(timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
-    index = build_index(root, generated_at, args.registry)
+    published_tags: set[str] | None = None
+    if args.published_tags_file:
+        tags_path = Path(args.published_tags_file)
+        try:
+            raw_tags = json.loads(tags_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"Could not read published tags file: {exc}", file=sys.stderr)
+            return 1
+        if not isinstance(raw_tags, list) or not all(
+            isinstance(tag, str) for tag in raw_tags
+        ):
+            print("published tags file must contain a JSON array of strings",
+                  file=sys.stderr)
+            return 1
+        published_tags = set(raw_tags)
+    index = build_index(root, generated_at, args.registry, published_tags)
     output = Path(args.output)
     if not output.is_absolute():
         output = root / output

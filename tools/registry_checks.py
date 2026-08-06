@@ -125,6 +125,84 @@ def validate_manifest_object(manifest, path_hint: str = "manifest.json") -> list
     elif "maintainers" in manifest:
         errors.append(f"{path_hint}: maintainers must be an array")
 
+    maintainer_ids = manifest.get("maintainerUserIds")
+    if maintainer_ids is not None:
+        if not isinstance(maintainer_ids, list) or not maintainer_ids:
+            errors.append(f"{path_hint}: maintainerUserIds must be a non-empty array")
+        elif isinstance(maintainers, list) and len(maintainer_ids) != len(maintainers):
+            errors.append(
+                f"{path_hint}: maintainerUserIds length must equal maintainers length"
+            )
+        if isinstance(maintainer_ids, list):
+            for index, user_id in enumerate(maintainer_ids):
+                if not _is_str(user_id) or not re.match(r"^[0-9]{1,20}$", user_id):
+                    errors.append(f"{path_hint}: maintainerUserIds[{index}] is invalid")
+    if (isinstance(maintainers, list) and isinstance(maintainer_ids, list)
+            and len(maintainers) == len(maintainer_ids)
+            and all(_is_str(item) for item in maintainer_ids)
+            and len(set(maintainer_ids)) != len(maintainer_ids)):
+        errors.append(f"{path_hint}: maintainerUserIds must be unique")
+
+    owner = manifest.get("owner")
+    if owner is not None:
+        if not isinstance(owner, dict):
+            errors.append(f"{path_hint}: owner must be an object")
+        else:
+            user_id = owner.get("userId")
+            owner_login = owner.get("login")
+            if not _is_str(user_id) or not re.match(r"^[0-9]{1,20}$", user_id):
+                errors.append(f"{path_hint}: owner.userId is invalid")
+            if not _is_str(owner_login) or not LOGIN_RE.match(owner_login):
+                errors.append(f"{path_hint}: owner.login is invalid")
+        if isinstance(authors, list) and authors:
+            first_author = authors[0]
+            if (not isinstance(first_author, dict)
+                    or not _is_str(first_author.get("githubUserId"))
+                    or not re.match(r"^[0-9]{1,20}$", first_author.get("githubUserId", ""))):
+                errors.append(
+                    f"{path_hint}: authors[0].githubUserId is required for "
+                    "new-format manifests"
+                )
+
+    if isinstance(owner, dict):
+        owner_id = owner.get("userId")
+        owner_login = owner.get("login")
+        if (_is_str(owner_id) and _is_str(owner_login)
+                and isinstance(maintainers, list)
+                and isinstance(maintainer_ids, list)):
+            for index, maintainer_id in enumerate(maintainer_ids):
+                if maintainer_id == owner_id and index < len(maintainers):
+                    if maintainers[index] != owner_login:
+                        errors.append(
+                            f"{path_hint}: owner.login must match "
+                            f"maintainers[{index}] for numeric user id "
+                            f"{owner_id}"
+                        )
+
+    if isinstance(authors, list):
+        for index, author in enumerate(authors):
+            if not isinstance(author, dict):
+                continue
+            author_id = author.get("githubUserId")
+            author_login = author.get("githubLogin")
+            if not _is_str(author_id) or not _is_str(author_login):
+                continue
+            if isinstance(owner, dict) and owner.get("userId") == author_id:
+                if owner.get("login") != author_login:
+                    errors.append(
+                        f"{path_hint}: authors[{index}].githubLogin must match "
+                        f"owner.login for numeric user id {author_id}"
+                    )
+            if isinstance(maintainer_ids, list) and isinstance(maintainers, list):
+                for m_index, maintainer_id in enumerate(maintainer_ids):
+                    if maintainer_id == author_id and m_index < len(maintainers):
+                        if maintainers[m_index] != author_login:
+                            errors.append(
+                                f"{path_hint}: authors[{index}].githubLogin must "
+                                f"match maintainers[{m_index}] for numeric user "
+                                f"id {author_id}"
+                            )
+
     package = manifest.get("package")
     if isinstance(package, dict):
         for field in ("fileName", "url", "size", "sha256"):
@@ -236,6 +314,7 @@ def load_index_entry(manifest: dict) -> dict:
         "name": manifest["name"],
         "version": manifest["version"],
         "summary": manifest.get("summary", ""),
+        "status": "published",
         "authors": authors,
         "maintainers": list(manifest.get("maintainers", [])),
         "license": manifest["license"],
