@@ -11,19 +11,32 @@ import base64
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import socket
 from pathlib import Path
 
+MAX_LIST_PAGES = 20
+MAX_LIST_ITEMS = 5000
+# Test-only override; production requires https Link URLs on the same host.
+_ALLOW_INSECURE_LINKS = False
+
 class GitHubApiError(RuntimeError):
-    def __init__(self, code: str, message: str, status: int = 0):
+    def __init__(self, code: str, message: str, status: int = 0,
+                 retry_after: float | None = None):
         super().__init__(message)
         self.code = code
         self.status = status
+        self.retry_after = retry_after
+
+    @property
+    def retryable(self) -> bool:
+        return self.status in (429, 500, 502, 503, 504) or self.status == 0
 
 
 def _b64url(data: bytes) -> str:
@@ -88,7 +101,16 @@ class GitHubClient:
         )
 
     def _request(self, method: str, url: str, token: str, payload=None,
-                 raw: bytes | None = None, content_type: str | None = None) -> dict:
+                 raw: bytes | None = None, content_type: str | None = None,
+                 retries: int = 3) -> dict:
+        data, _headers = self._request_full(
+            method, url, token, payload, raw, content_type, retries
+        )
+        return data
+
+    def _request_full(self, method: str, url: str, token: str, payload=None,
+                      raw: bytes | None = None, content_type: str | None = None,
+                      retries: int = 3):
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
@@ -100,24 +122,137 @@ class GitHubClient:
             headers["Content-Type"] = "application/json"
         elif content_type is not None and data is not None:
             headers["Content-Type"] = content_type
-        request = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(request, timeout=120) as response:
-                body = response.read()
-                if not body:
-                    return {}
-                return json.loads(body.decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:500]
+        attempt = 0
+        while True:
+            request = urllib.request.Request(
+                url, data=data, headers=headers, method=method
+            )
             try:
-                parsed = json.loads(detail)
-                message = parsed.get("message", detail)
-            except json.JSONDecodeError:
-                message = detail
-            raise GitHubApiError("github_api_error", message, exc.code) from exc
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    body = response.read()
+                    if not body:
+                        return {}, dict(response.headers)
+                    return json.loads(body.decode("utf-8")), dict(response.headers)
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", "replace")[:500]
+                exc.close()
+                retry_after = None
+                header_value = exc.headers.get("Retry-After")
+                if header_value:
+                    try:
+                        retry_after = float(header_value)
+                    except ValueError:
+                        retry_after = None
+                try:
+                    parsed = json.loads(detail)
+                    message = parsed.get("message", detail)
+                except json.JSONDecodeError:
+                    message = detail
+                api_error = GitHubApiError(
+                    "github_api_error", message, exc.code, retry_after
+                )
+            except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+                api_error = GitHubApiError(
+                    "github_timeout",
+                    "GitHub request timed out or failed to connect",
+                )
+            if (
+                method == "GET"
+                and api_error.retryable
+                and attempt + 1 < retries
+            ):
+                delay = api_error.retry_after
+                if delay is None:
+                    delay = min(1.5 * (2 ** attempt), 30)
+                time.sleep(min(delay, 30))
+                attempt += 1
+                continue
+            raise api_error
+
+    def _parse_link_next(self, link_header: str, current_url: str) -> str | None:
+        if not link_header:
+            return None
+        expected_host = urllib.parse.urlsplit(current_url).netloc
+        for part in link_header.split(","):
+            match = re.match(r"\s*<([^>]+)>\s*;\s*rel=\"next\"", part)
+            if not match:
+                continue
+            next_url = match.group(1)
+            parsed = urllib.parse.urlsplit(next_url)
+            if (parsed.scheme != "https" or parsed.netloc != expected_host) and not _ALLOW_INSECURE_LINKS:
+                raise GitHubApiError(
+                    "github_pagination_invalid",
+                    "pagination Link next URL is not https on the same host",
+                )
+            return next_url
+        return None
+
+    def _request_paged(self, first_url: str, token: str) -> list[list[dict]]:
+        """Follow Link headers with hard limits; fails closed on anomalies."""
+        pages: list[list[dict]] = []
+        visited: set[str] = set()
+        url: str | None = first_url
+        page_number = 0
+        while url is not None:
+            if url in visited:
+                raise GitHubApiError(
+                    "github_pagination_cycle", "pagination Link cycle detected"
+                )
+            visited.add(url)
+            page_number += 1
+            if page_number > MAX_LIST_PAGES:
+                raise GitHubApiError(
+                    "github_pagination_overflow",
+                    f"pagination exceeded {MAX_LIST_PAGES} pages",
+                )
+            data, response_headers = self._request_full("GET", url, token)
+            if not isinstance(data, list):
+                raise GitHubApiError(
+                    "github_pagination_invalid",
+                    f"expected a list from {url}",
+                )
+            pages.append(data)
+            url = self._parse_link_next(response_headers.get("Link", ""), url)
+        total = sum(len(page) for page in pages)
+        if total > MAX_LIST_ITEMS:
+            raise GitHubApiError(
+                "github_pagination_overflow",
+                f"list exceeded {MAX_LIST_ITEMS} items",
+            )
+        return pages
 
     def get_user(self, access_token: str) -> dict:
         return self._request("GET", f"{self.api_base}/user", access_token)
+
+    def get_release(self, token: str, release_id: int) -> dict | None:
+        url = f"{self.api_base}/repos/{self.owner}/{self.repo}/releases/{release_id}"
+        try:
+            return self._request("GET", url, token)
+        except GitHubApiError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def get_release_by_tag(self, token: str, tag: str) -> dict | None:
+        quoted = urllib.parse.quote(tag, safe="")
+        url = f"{self.api_base}/repos/{self.owner}/{self.repo}/releases/tags/{quoted}"
+        try:
+            return self._request("GET", url, token)
+        except GitHubApiError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def get_release_assets(self, token: str, release_id: int) -> list[dict]:
+        url = (
+            f"{self.api_base}/repos/{self.owner}/{self.repo}/releases/"
+            f"{release_id}/assets?per_page=100"
+        )
+        return [
+            item
+            for page in self._request_paged(url, token)
+            for item in page
+        ]
 
     def get_installation_token(self, app_id: str, installation_id: str,
                                private_key_pem: str) -> str:
@@ -183,6 +318,25 @@ class GitHubClient:
             "POST", url, token, {"ref": f"refs/heads/{branch}", "sha": sha}
         )
 
+    def get_branch_ref(self, token: str, branch: str) -> dict | None:
+        quoted = urllib.parse.quote(f"heads/{branch}", safe="")
+        url = f"{self.api_base}/repos/{self.owner}/{self.repo}/git/ref/{quoted}"
+        try:
+            return self._request("GET", url, token)
+        except GitHubApiError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def delete_branch_ref(self, token: str, branch: str) -> None:
+        quoted = urllib.parse.quote(f"heads/{branch}", safe="")
+        url = f"{self.api_base}/repos/{self.owner}/{self.repo}/git/ref/{quoted}"
+        try:
+            self._request("DELETE", url, token)
+        except GitHubApiError as exc:
+            if exc.status != 404:
+                raise
+
     def create_or_update_file(self, token: str, path: str, message: str,
                               content: str, branch: str, sha: str | None = None) -> dict:
         url = f"{self.api_base}/repos/{self.owner}/{self.repo}/contents/{path}"
@@ -221,3 +375,24 @@ class GitHubClient:
     def close_pull_request(self, token: str, pr_number: int) -> None:
         url = f"{self.api_base}/repos/{self.owner}/{self.repo}/pulls/{pr_number}"
         self._request("PATCH", url, token, {"state": "closed"})
+
+    def get_pull_request_by_head(self, token: str, head: str) -> dict | None:
+        query = urllib.parse.urlencode(
+            {"state": "open", "head": f"{self.owner}:{head}", "per_page": "100"}
+        )
+        url = f"{self.api_base}/repos/{self.owner}/{self.repo}/pulls?{query}"
+        for page in self._request_paged(url, token):
+            if page:
+                return page[0]
+        return None
+
+    def get_pull_request_files(self, token: str, pr_number: int) -> list[str]:
+        url = (
+            f"{self.api_base}/repos/{self.owner}/{self.repo}/pulls/"
+            f"{pr_number}/files?per_page=100"
+        )
+        return [
+            entry.get("filename", "")
+            for page in self._request_paged(url, token)
+            for entry in page
+        ]

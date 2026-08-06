@@ -22,6 +22,11 @@ _SENSITIVE_FIELD_RE = re.compile(
     r"|private_key|password)\"?\s*[:=]\s*[\"']?)[^,\s\"'}]+"
 )
 
+_SENSITIVE_QUERY_RE = re.compile(
+    r"(?i)([?&](?:access_token|refresh_token|github_token|token|client_secret"
+    r"|device_code|code|authorization)=)[^&\s\"']*"
+)
+
 
 def redact_text(text: str) -> str:
     """Replace token-like values with [REDACTED]."""
@@ -29,6 +34,7 @@ def redact_text(text: str) -> str:
         return text
     text = _TOKEN_VALUE_RE.sub(r"\1[REDACTED]", text)
     text = _SENSITIVE_FIELD_RE.sub(r"\1[REDACTED]", text)
+    text = _SENSITIVE_QUERY_RE.sub(r"\1[REDACTED]", text)
     return text
 
 
