@@ -115,3 +115,42 @@ Draft asset 最小验证 **未通过**，按 Gate 停止完整 E2E。
 
 本文件不包含：GITHUB_TOKEN、用户 token、Authorization 值、Cookie、
 Publisher 私钥、session secret、签名下载 URL。
+
+---
+
+## 追加：Check Run 架构轮（2026-08-07）
+
+### 已完成的真实结果
+
+- `pr-validation.yml` 已改为仅 `registry-checks`（不再访问 Draft
+  asset）；探针 PR #2（`staging-registry-probe`）两次真实运行：
+  run `31146164896` 与 `31146449700` 均为 **success**（只读
+  GITHUB_TOKEN，`contents: read` + `pull-requests: read`）。
+- 分支保护已按 `checks` 对象固定来源：
+  `registry-checks` → app_id `15368`（GitHub Actions，真实查询）；
+  `package-validation` 待 Publisher App 创建后固定其 app_id。
+- cleanup 真实测试：
+  - PR #1 关闭 → run `31145911065` success，删除 Draft Release
+    `366355280`；随后用正确端点手动删除遗留分支（原代码端点错误，
+    已修复为 `/git/refs/...`）；
+  - PR #2 关闭（Release 不存在，GitHub 对 integration token 返回
+    403）→ run `31146624958` success，删除 submission 分支（403 已按
+    absent 安全处理）。
+- Pages HTTPS：`https_enforced=true`，证书 approved；
+  `https://blog.qingchenyou.asia/NeurolingsCE-Mascots-Staging/index-v1.json`
+  返回 **200** 且为合法 JSON（`github.io` URL 301 重定向到同一地址）。
+- `publish-and-deploy` 真实 workflow_dispatch：
+  run `31146613045` **success**（publish_releases / generate_index /
+  deploy_pages 三 job 均 success）；索引已部署到 Pages。
+- 投稿服务本地：75 个服务测试 + 79/80 个工具测试通过（含 Check Run
+  创建/更新、幂等恢复、head SHA 绑定、环境隔离、输出脱敏等新增测试）。
+
+### 仍未完成（依赖维护者）
+
+- 两个 GitHub App 未创建（UI 操作）：Login App 与 Publisher App
+  （需 Checks Read/Write）。
+- Publisher App `package-validation` Check Run 未真实创建；
+  分支保护未绑定 Publisher App ID。
+- 投稿服务 production 模式未部署；Device Flow / 上传 / 服务内
+  Draft asset 下载与 CLI 再验证未真实运行。
+- 客户端刷新/下载/安装未执行（索引为空且无已发布 mascot）。
