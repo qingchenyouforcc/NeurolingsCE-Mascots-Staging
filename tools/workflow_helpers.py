@@ -486,8 +486,14 @@ def delete_branch_ref(token: str, owner: str, repo: str, branch: str) -> None:
     try:
         github_request("DELETE", url, token)
     except WorkflowApiError as exc:
-        if exc.status != 404:
-            raise
+        # A ref delete is idempotent: 404 and 422 "Reference does not exist"
+        # both mean the branch is already gone (422 is what GitHub returns
+        # when a previously deleted ref is deleted again).
+        if exc.status == 404:
+            return
+        if exc.status == 422 and "Reference does not exist" in str(exc):
+            return
+        raise
 
 
 def verify_and_cleanup_submission_pr(token: str, owner: str, repo: str,

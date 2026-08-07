@@ -336,6 +336,41 @@ class WorkflowHelpersTest(unittest.TestCase):
         self.assertEqual(result["reason"], "release_already_absent")
         self.assertEqual(result["deletedBranch"], "submission/sample-1.2.3")
 
+    def test_cleanup_rerun_with_absent_branch_is_safe_noop(self):
+        # Second cleanup run: the release was already deleted (404) and the
+        # branch was already deleted too (GitHub returns 422 "Reference does
+        # not exist" for a repeated ref delete). Both must be idempotent.
+        pr = self._pr()
+        manifest = submission_manifest(release_id=999)
+
+        def ref_already_gone(method, url):
+            raise wh.WorkflowApiError(
+                "GitHub API 422 for "
+                "https://api.github.com/repos/owner/repo/git/refs/heads/"
+                "submission/sample-1.2.3: "
+                '{"message":"Reference does not exist",'
+                '"documentation_url":"https://docs.github.com/rest/git/refs'
+                '#delete-a-reference","status":"422"}',
+                422,
+            )
+
+        self.install_fake({
+            ("GET", "/repos/owner/repo/pulls/7"): (200, pr),
+            ("GET", "/repos/owner/repo/pulls/7/files"): (
+                200, [{"filename": "mascots/sample/manifest.json"}],
+            ),
+            ("GET", "/repos/owner/repo/contents/mascots/sample/manifest.json"): (
+                200, encoded_manifest(manifest),
+            ),
+            ("GET", "/repos/owner/repo/releases/999"): (404, None),
+            ("DELETE", "/repos/owner/repo/git/refs/heads/submission/sample-1.2.3"):
+                ref_already_gone,
+        })
+        result = wh.verify_and_cleanup_submission_pr("t", "owner", "repo", 7)
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["reason"], "release_already_absent")
+        self.assertEqual(result["deletedBranch"], "submission/sample-1.2.3")
+
     def test_cleanup_deletes_verified_draft(self):
         pr = self._pr()
         manifest = submission_manifest()
