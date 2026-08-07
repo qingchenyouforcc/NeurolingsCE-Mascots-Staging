@@ -284,3 +284,53 @@ Publisher 私钥、session secret、签名下载 URL。
 2. 将 staging 仓库变量 `VALIDATOR_REPO` 指向已含该命令的公开仓库/分支；
    然后 `workflow_dispatch` 重跑 publish-and-deploy（Release 仍为
    draft，重跑将完成验证并发布）。
+
+---
+
+## 追加：CLI validator 合入与真实发布完成轮（2026-08-07）
+
+### 方案 1 已执行（最小提交）
+
+- 在干净 worktree（基于 `e06904b`）仅提交 8 个文件、645 行：
+  `MascotPackage.hpp/.cc`、`SecurityLimits.hpp`、
+  `CommandLineParser.cc`、`CommandExecutor.cc`、`OutputFormatter.cc`、
+  `InternalCli.hpp`、`AppCoreTests.cc`（validator 测试与 helper）；
+  不含 CMakeLists、UI/runtime/store、配置文件与 build 产物。
+- commit `5854171`（`feat(cli): add mascot package validation
+  command`）已推送到 `qingchenyouforcc/NeurolingsCE` main。
+- 干净构建验证：Release 构建成功；CTest 2/2 通过；
+  `NeurolingsCE-cli --json --mascot validate`：
+  valid 包 exit 0（`ok:true`），invalid 包（缺 actions.xml）exit 1
+  （`ok:false` + 错误列表）。
+
+### 真实发布（workflow_dispatch 重跑）
+
+- run `31153742626` **success**：publish_releases /
+  generate_index / deploy_pages 三 job 均 success。
+- 日志确认：`Published staging-e2e 0.1.0 (release 366547997)`，
+  汇总 `{"alreadyPublished": 0, "published": 1,
+  "skippedWithoutReleaseMetadata": 0}`。
+- Release `366547997`：`draft=false`，`published_at=
+  2026-08-07T06:24:53Z`。
+- HTTPS 索引 `https://blog.qingchenyou.asia/NeurolingsCE-Mascots-Staging/
+  index-v1.json`（200）包含：
+  `id=staging-e2e`、`version=0.1.0`、`status=published`、
+  `sha256=3429e7880265fec0aa231a342660ce1cbb785d5bf4dcd3d0192df7328bf5af99`、
+  `size=664`、下载 URL 指向已发布 Release asset、maintainers
+  `qingchenyouforcc`（manifest 中 numeric owner/maintainer ID 均为
+  `90140161`，由 registry-checks 验证；索引按 schema 仅含 login）。
+- 此前的失败 run `31152334227` 保留为 fail-closed 证据（validator
+  缺失时拒绝发布）。
+
+### Cleanup 复测（真实）
+
+- 探针 PR #3 关闭 → cleanup run `31154131230` **success**；
+  `submission/checkrun-probe-0.1.0` 分支已删除（404）；已发布
+  `staging-e2e` Release 与索引不受影响。
+
+### 剩余项（未在本轮执行）
+
+- 客户端 Store 下载/安装/重启持久化（需 staging 配置的 Release 客户端）；
+- `staging-e2e 0.1.1` 更新投稿与 `0.1.0` 重复版本拒绝；
+- `staging-cleanup-test 0.1.0` 独立 cleanup 投稿；
+- 投稿服务 HTTPS 公网部署（当前仅 localhost production）。
