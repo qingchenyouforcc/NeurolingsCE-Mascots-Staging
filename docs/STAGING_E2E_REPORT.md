@@ -53,13 +53,52 @@
   `qcvjkzcs7j74`，自 `2026-08-06T15:22:49Z` 起，期间报告
   “Workflow runs are failing or delayed in starting, and some queued
   jobs may time out”）。
-- 已执行 `gh run rerun`，新 attempt 排队中；以下字段待真实结果填写：
-  - workflow run ID / event / job permissions；
-  - `GET /repos/<owner>/<repo>/releases/<id>` HTTP 状态码与 `draft`；
-  - `GET .../releases/<id>/assets` HTTP 状态码与分页；
-  - `GET .../releases/assets/<id>` HTTP 状态码（200/302）、最终 host、
-    Authorization 是否转发（必须为否）、SHA-256；
-  - PR check 最终结论。
+- 已执行 `gh run rerun`；attempt 2 同样在故障期间排队 15 分钟后被
+  cancelled；attempt 3 在恢复后真实执行：
+
+| 项目 | 真实结果 |
+| --- | --- |
+| run ID | `31123472522`（attempt 3，URL：`.../actions/runs/31123472522`） |
+| workflow event | `pull_request` |
+| job permissions | `contents: read` + `pull-requests: read`（workflow 声明值） |
+| `registry-checks` | **success** |
+| `package-validation` | **failure** |
+| `GET /repos/<owner>/<repo>/releases/<release_id>` | **HTTP 403**（自动 `GITHUB_TOKEN`） |
+| `GET .../releases/<id>/assets` | 未执行到（release 读取失败即停止） |
+| `GET .../releases/assets/<asset_id>` | 未执行到 |
+| PR check 最终结论 | failure（package-validation） |
+
+### 结论（决定性）
+
+`pull_request` workflow 中 `contents: read` + `pull-requests: read`
+的自动 `GITHUB_TOKEN` **不能读取同仓库 Draft Release**（403），因此
+Draft asset 最小验证 **未通过**，按 Gate 停止完整 E2E。
+
+### 失败 Gate 处理
+
+- 未提升 PR workflow 到 `contents: write`；
+- 未向 workflow 注入 Publisher App 私钥；
+- 未提前发布未经审核的 Release；
+- 未使用长期共享下载 token；
+- 完整 E2E（merge/publish/Pages/client）未继续。
+
+### 可选替代方案（需维护者批准，未实施）
+
+1. **发布时验证（推荐，权限最小）**：PR validation 只做 schema、
+   重复与 changed-files 检查；Draft asset 的下载、SHA-256 与 CLI
+   验证移到 `publish-and-deploy.publish_releases`（该 job 本来就以
+   `contents: write` 验证并发布，Draft 对外不可见）。边界：不新增
+   任何 workflow 权限；验证失败则 release 保持 draft，index/Pages
+   不部署。
+2. **独立只读验证 App**：新建 Contents: Read-only + Pull requests:
+   Read-only 的 GitHub App，仅安装到 staging 仓库；PR validation 用
+   短时 installation token 读取 Draft asset。边界：私钥作为仓库
+   secret 注入（仅该 job 使用），仍只 checkout base SHA、不执行 PR
+   代码；需维护者创建 App 并批准 secret 注入。
+3. **窄范围 `contents: write` PR job**：仅在 package-validation job
+   提升为 `contents: write`（其余保持只读）。边界：最小提升但仍宽于
+   只读；需维护者明确批准；保持 base SHA checkout 与 changed-files
+   白名单。
 
 ## 5. 状态摘要
 
@@ -67,8 +106,8 @@
 | --- | --- |
 | Staging 仓库/分支保护/Pages 配置 | Passed（真实） |
 | 三个 Draft API（用户 token 预验证） | Passed（真实） |
-| PR validation（GITHUB_TOKEN） | Pending（Actions outage） |
-| Merge → Publish → Index → Pages | Not run |
+| PR validation（GITHUB_TOKEN） | Failed（release GET 403，Gate 停止） |
+| Merge → Publish → Index → Pages | Not run（Gate 停止） |
 | 客户端刷新/下载/安装 | Not run |
 | Device Flow / 投稿服务 | Not run（需两个 GitHub App，UI 创建） |
 
