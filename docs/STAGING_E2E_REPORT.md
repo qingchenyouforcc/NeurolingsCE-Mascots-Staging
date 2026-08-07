@@ -141,7 +141,11 @@ Publisher 私钥、session secret、签名下载 URL。
   返回 **200** 且为合法 JSON（`github.io` URL 301 重定向到同一地址）。
 - `publish-and-deploy` 真实 workflow_dispatch：
   run `31146613045` **success**（publish_releases / generate_index /
-  deploy_pages 三 job 均 success）；索引已部署到 Pages。
+  deploy_pages 三 job 均 success）；修复索引 `registry` 字段后再次
+  部署 run `31148037327` **success**，HTTPS 索引内容：
+  `{"generatedAt": "2026-08-07T04:40:17Z", "mascots": [],
+  "registry": "qingchenyouforcc/NeurolingsCE-Mascots-Staging",
+  "schemaVersion": 1}`。
 - 投稿服务本地：75 个服务测试 + 79/80 个工具测试通过（含 Check Run
   创建/更新、幂等恢复、head SHA 绑定、环境隔离、输出脱敏等新增测试）。
 
