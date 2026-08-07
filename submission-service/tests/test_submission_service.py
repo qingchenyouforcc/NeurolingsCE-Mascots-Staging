@@ -742,6 +742,35 @@ class SubmissionServiceTest(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertEqual(payload["error"]["code"], "duplicate_id_version")
 
+    def test_exact_resubmit_of_published_version_returns_duplicate(self):
+        # A real first submission succeeds while the registry has no entry.
+        status, payload = self._submit(key="content-key-1")
+        self.assertEqual(status, 201)
+        # The same id/version is now published in the registry manifest.
+        self.mock.existing_manifest = {
+            "id": "sample",
+            "version": "1.0.0",
+        }
+        release_posts_before = sum(
+            1 for entry in self.mock.requests
+            if entry["method"] == "POST" and "/releases" in entry["path"]
+        )
+        # Re-uploading the exact same package with a NEW idempotency key must
+        # fail as a duplicate/version error, not replay the old submission.
+        status2, payload2 = self._submit(key="content-key-2")
+        self.assertEqual(status2, 409)
+        self.assertEqual(payload2["error"]["code"], "duplicate_id_version")
+        release_posts_after = sum(
+            1 for entry in self.mock.requests
+            if entry["method"] == "POST" and "/releases" in entry["path"]
+        )
+        self.assertEqual(release_posts_after, release_posts_before)
+        self.assertNotIn(
+            "submitted",
+            payload2,
+            "duplicate resubmission must not return the old submission",
+        )
+
     def test_identity_mismatch_is_rejected(self):
         status, payload = self._submit(metadata=metadata_for(login="other-user"))
         self.assertEqual(status, 403)

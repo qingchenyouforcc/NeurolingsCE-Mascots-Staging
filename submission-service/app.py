@@ -599,10 +599,6 @@ class SubmissionService:
         content_hash = hashlib.sha256(
             f"{mid}|{version}|{sha256}".encode("utf-8")
         ).hexdigest()
-        if existing is None:
-            duplicate = self._find_by_content_hash(content_hash)
-            if duplicate is not None:
-                return duplicate
 
         branch = f"submission/{mid}-{version}"
         if len(branch.encode("utf-8")) > MAX_BRANCH_LENGTH:
@@ -616,6 +612,16 @@ class SubmissionService:
         existing_parsed, ownership = self._resolve_ownership(
             token_app, manifest_path, mid, version, metadata, login, user_id
         )
+
+        # The registry version/ownership check must happen before content-hash
+        # dedup: re-uploading the exact package of an already published version
+        # is a duplicate/version error, not an idempotent replay of the old
+        # submission. Content dedup remains safe for new ids and for higher
+        # versions whose first attempt created resources.
+        if existing is None:
+            duplicate = self._find_by_content_hash(content_hash)
+            if duplicate is not None:
+                return duplicate
 
         if existing is None:
             submission: dict = {

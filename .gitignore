@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 *.pem
 *.key
+.secrets/
 .env
 .env.*
 submission-service/data/
