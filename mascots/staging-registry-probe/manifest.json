@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1",
+  "id": "staging-registry-probe",
+  "name": "Staging Registry Probe",
+  "version": "0.1.0",
+  "summary": "Probe for the registry-only PR validation",
+  "description": "Temporary probe; no release is attached.",
+  "authors": [
+    {
+      "githubLogin": "qingchenyouforcc",
+      "githubUserId": "90140161",
+      "displayName": "Qingchen You"
+    }
+  ],
+  "maintainers": ["qingchenyouforcc"],
+  "maintainerUserIds": ["90140161"],
+  "owner": {"userId": "90140161", "login": "qingchenyouforcc"},
+  "license": "MIT",
+  "isDerivative": false,
+  "minimumNeurolingsCEVersion": "0.5.1",
+  "package": {
+    "fileName": "staging-registry-probe.mascot",
+    "url": "https://github.com/qingchenyouforcc/NeurolingsCE-Mascots-Staging/releases/download/draft/staging-registry-probe-0.1.0/staging-registry-probe.mascot",
+    "size": 1,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "contentType": "application/octet-stream"
+  },
+  "tags": ["staging"],
+  "categories": ["test"],
+  "createdAt": "2026-08-07T00:00:00Z",
+  "updatedAt": "2026-08-07T00:00:00Z",
+  "release": {
+    "releaseId": 1,
+    "assetId": 1,
+    "tag": "draft/staging-registry-probe-0.1.0"
+  },
+  "submissionId": "bbbbbbbbbbbbbbbbbbbbbbbb"
+}
