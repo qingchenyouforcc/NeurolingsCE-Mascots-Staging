@@ -311,6 +311,31 @@ class WorkflowHelpersTest(unittest.TestCase):
         ))
         self.assertEqual(result["deletedBranch"], "submission/sample-1.2.3")
 
+    def test_cleanup_absent_release_via_403_is_safe_noop(self):
+        pr = self._pr()
+        manifest = submission_manifest(release_id=999)
+
+        def forbidden(method, url):
+            raise wh.WorkflowApiError(
+                "Resource not accessible by integration", 403
+            )
+
+        self.install_fake({
+            ("GET", "/repos/owner/repo/pulls/7"): (200, pr),
+            ("GET", "/repos/owner/repo/pulls/7/files"): (
+                200, [{"filename": "mascots/sample/manifest.json"}],
+            ),
+            ("GET", "/repos/owner/repo/contents/mascots/sample/manifest.json"): (
+                200, encoded_manifest(manifest),
+            ),
+            ("GET", "/repos/owner/repo/releases/999"): forbidden,
+            ("DELETE", "/repos/owner/repo/git/refs/heads/submission/sample-1.2.3"): (204, {}),
+        })
+        result = wh.verify_and_cleanup_submission_pr("t", "owner", "repo", 7)
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["reason"], "release_already_absent")
+        self.assertEqual(result["deletedBranch"], "submission/sample-1.2.3")
+
     def test_cleanup_deletes_verified_draft(self):
         pr = self._pr()
         manifest = submission_manifest()

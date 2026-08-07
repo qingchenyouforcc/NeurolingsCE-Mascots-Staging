@@ -324,7 +324,11 @@ def get_release_by_id(token: str, owner: str, repo: str, release_id: int) -> dic
     try:
         return github_request("GET", url, token)
     except WorkflowApiError as exc:
-        if exc.status == 404:
+        # GitHub returns 404 for absent releases to user tokens and 403
+        # ("Resource not accessible by integration") for absent or
+        # inaccessible releases to workflow tokens. Callers treat both as
+        # "not present" and fail closed on any other unexpected state.
+        if exc.status in (404, 403):
             return None
         raise
 
