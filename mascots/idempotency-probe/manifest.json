@@ -1,0 +1,8 @@
+{
+  "id": "idempotency-probe",
+  "version": "0.1.0",
+  "release": {
+    "releaseId": 999999,
+    "tag": "draft/idempotency-probe-0.1.0"
+  }
+}
