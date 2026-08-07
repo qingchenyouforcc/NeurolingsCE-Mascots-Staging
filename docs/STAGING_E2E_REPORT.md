@@ -166,7 +166,7 @@ Publisher 私钥、session secret、签名下载 URL。
 ### 真实检查结果
 
 - 通过 `GET /apps/{slug}` 检查四个候选 slug
-  （`neurolingsce-login-staging`、`neurolingsce-mascot-publisher-staging`、
+  （`neurolingsce-login-staging`、`neurolingsce-publisher-staging`、
   `neurolingsce-login`、`neurolingsce-mascot-publisher`）均 **404**；
 - staging 仓库既有 check runs 全部来自 GitHub Actions（app_id
   `15368`），不存在 Publisher App 产生的 `package-validation`
@@ -193,7 +193,7 @@ Publisher 私钥、session secret、签名下载 URL。
 
 1. UI 创建 `NeurolingsCE Login Staging`（权限全 None、启用 Device
    Flow，记录 Client ID）；
-2. UI 创建 `NeurolingsCE Mascot Publisher Staging`（Metadata
+2. UI 创建 `NeurolingsCE Publisher Staging`（Metadata
    Read-only、Contents Read/Write、Pull requests Read/Write、
    Checks Read/Write），仅安装到
    `qingchenyouforcc/NeurolingsCE-Mascots-Staging`，下载私钥 PEM；

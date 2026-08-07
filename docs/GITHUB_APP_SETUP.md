@@ -107,7 +107,8 @@ Manifest Flow，优先使用 UI 创建两个 staging App。
   不混用生产数据）。
 - Login App：建议名称 `NeurolingsCE Login Staging`，权限仍为全部 None，
   不安装到任何仓库。
-- Publisher App：建议名称 `NeurolingsCE Mascot Publisher Staging`，
+- Publisher App：建议名称 `NeurolingsCE Publisher Staging`
+  （slug：`neurolingsce-publisher-staging`），
   Repository permissions 同上（Metadata: Read-only、Contents: Read and
   write、Pull requests: Read and write、Checks: Read and write），
   只安装到 staging 仓库。
