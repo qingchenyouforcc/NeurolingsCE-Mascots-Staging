@@ -158,3 +158,50 @@ Publisher 私钥、session secret、签名下载 URL。
 - 投稿服务 production 模式未部署；Device Flow / 上传 / 服务内
   Draft asset 下载与 CLI 再验证未真实运行。
 - 客户端刷新/下载/安装未执行（索引为空且无已发布 mascot）。
+
+---
+
+## 追加：App 创建前检查轮（2026-08-07）
+
+### 真实检查结果
+
+- 通过 `GET /apps/{slug}` 检查四个候选 slug
+  （`neurolingsce-login-staging`、`neurolingsce-mascot-publisher-staging`、
+  `neurolingsce-login`、`neurolingsce-mascot-publisher`）均 **404**；
+- staging 仓库既有 check runs 全部来自 GitHub Actions（app_id
+  `15368`），不存在 Publisher App 产生的 `package-validation`
+  Check Run；
+- 本机未发现 Publisher App 私钥 PEM（仅发现无关的
+  `StarlightGUI_TemporaryKey.pfx`）。
+
+结论：**两个 staging GitHub App 尚未创建**，本轮停在外部依赖点，
+未伪造任何 App/Check Run 结果。
+
+### 本地完成项
+
+- tools/tests：80 OK；submission-service/tests：75 OK（1 skip）；
+  `validate_registry` ok；`generate_index` ok；
+- 主仓库 Release：CTest 2/2 通过；
+- localhost production 模式真实自检：
+  - 缺 `SUBMISSION_SESSION_SECRET` → 拒绝启动（exit 2，fail closed）；
+  - 随机 secret + 真实 `NeurolingsCE-cli`（Release）→ 启动自检通过，
+    `GET /healthz` → `{"ok": true}`；
+  - 服务标记：`env=production`、`validator=required`、
+    `github_configured=False`（Publisher App 配置未设置，仅提交时使用）。
+
+### 待维护者完成（外部依赖）
+
+1. UI 创建 `NeurolingsCE Login Staging`（权限全 None、启用 Device
+   Flow，记录 Client ID）；
+2. UI 创建 `NeurolingsCE Mascot Publisher Staging`（Metadata
+   Read-only、Contents Read/Write、Pull requests Read/Write、
+   Checks Read/Write），仅安装到
+   `qingchenyouforcc/NeurolingsCE-Mascots-Staging`，下载私钥 PEM；
+3. 将私钥放到本机安全路径（如
+   `D:\CPP_project\NeurolingsCE-Mascots\.secrets\publisher-app-key.pem`，
+   该路径已被 `.gitignore` 的 `*.pem` 覆盖），并把
+   `GITHUB_PUBLISHER_APP_ID`、`GITHUB_PUBLISHER_INSTALLATION_ID`、
+   `GITHUB_PUBLISHER_PRIVATE_KEY_PATH` 写入服务端环境（不提交）；
+4. 部署 HTTPS 投稿服务（或授权 localhost production 验证继续）。
+
+维护者完成后，下一轮即可从“最小 Check Run 探针”继续。

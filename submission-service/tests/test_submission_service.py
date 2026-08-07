@@ -963,7 +963,7 @@ class SubmissionServiceTest(unittest.TestCase):
             "draft release should be deleted",
         )
         self.assertTrue(
-            any("DELETE" in entry["method"] and "/git/ref/heads" in entry["path"]
+            any("DELETE" in entry["method"] and "/git/refs/heads" in entry["path"]
                 for entry in self.mock.requests)
         )
 
