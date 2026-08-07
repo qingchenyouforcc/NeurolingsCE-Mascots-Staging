@@ -478,7 +478,7 @@ def delete_release(token: str, owner: str, repo: str, release_id: int) -> None:
 
 def delete_branch_ref(token: str, owner: str, repo: str, branch: str) -> None:
     quoted = urllib.parse.quote(f"heads/{branch}", safe="/")
-    url = f"https://api.github.com/repos/{owner}/{repo}/git/ref/{quoted}"
+    url = f"https://api.github.com/repos/{owner}/{repo}/git/refs/{quoted}"
     try:
         github_request("DELETE", url, token)
     except WorkflowApiError as exc:

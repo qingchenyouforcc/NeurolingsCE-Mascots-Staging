@@ -483,8 +483,8 @@ class GitHubClient:
             raise
 
     def delete_branch_ref(self, token: str, branch: str) -> None:
-        quoted = urllib.parse.quote(f"heads/{branch}", safe="")
-        url = f"{self.api_base}/repos/{self.owner}/{self.repo}/git/ref/{quoted}"
+        quoted = urllib.parse.quote(f"heads/{branch}", safe="/")
+        url = f"{self.api_base}/repos/{self.owner}/{self.repo}/git/refs/{quoted}"
         try:
             self._request("DELETE", url, token)
         except GitHubApiError as exc:

@@ -316,7 +316,7 @@ class WorkflowHelpersTest(unittest.TestCase):
                 200, {"id": 42, "tag_name": "draft/sample-1.2.3", "draft": True},
             ),
             ("DELETE", "/repos/owner/repo/releases/42"): (204, {}),
-            ("DELETE", "/repos/owner/repo/git/ref/heads/submission/sample-1.2.3"): (204, {}),
+            ("DELETE", "/repos/owner/repo/git/refs/heads/submission/sample-1.2.3"): (204, {}),
         })
         result = wh.verify_and_cleanup_submission_pr("t", "owner", "repo", 7)
         self.assertTrue(result["verified"])
