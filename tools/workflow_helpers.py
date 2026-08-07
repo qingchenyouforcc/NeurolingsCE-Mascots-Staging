@@ -563,9 +563,11 @@ def verify_and_cleanup_submission_pr(token: str, owner: str, repo: str,
 
     release = get_release_by_id(token, owner, repo, int(release_id))
     if release is None:
+        delete_branch_ref(token, owner, repo, branch)
         result["verified"] = True
         result["reason"] = "release_already_absent"
         result["deletedReleaseId"] = release_id
+        result["deletedBranch"] = branch
         return result
     if release.get("draft") is not True:
         result["reason"] = "release_not_draft"

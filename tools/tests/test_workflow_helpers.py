@@ -294,12 +294,22 @@ class WorkflowHelpersTest(unittest.TestCase):
                 200, encoded_manifest(manifest),
             ),
             ("GET", "/repos/owner/repo/releases/999"): (404, None),
+            ("DELETE", "/repos/owner/repo/git/refs/heads/submission/sample-1.2.3"): (204, {}),
         })
-        # A missing release is safe: nothing to delete and no DELETE issued.
+        # A missing release is safe: no release DELETE, but the verified
+        # submission branch is still removed (idempotent cleanup).
         result = wh.verify_and_cleanup_submission_pr("t", "owner", "repo", 7)
         self.assertTrue(result["verified"])
         self.assertEqual(result["reason"], "release_already_absent")
-        self.assertFalse(any(m == "DELETE" for m, _ in self.calls))
+        self.assertFalse(any(
+            method == "DELETE" and "/releases/" in url
+            for method, url in self.calls
+        ))
+        self.assertTrue(any(
+            method == "DELETE" and "/git/refs/" in url
+            for method, url in self.calls
+        ))
+        self.assertEqual(result["deletedBranch"], "submission/sample-1.2.3")
 
     def test_cleanup_deletes_verified_draft(self):
         pr = self._pr()
