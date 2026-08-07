@@ -1,0 +1,50 @@
+{
+  "authors": [
+    {
+      "displayName": "Qingchen You",
+      "githubLogin": "qingchenyouforcc",
+      "githubUserId": "90140161"
+    }
+  ],
+  "categories": [
+    "test"
+  ],
+  "createdAt": "2026-08-07T05:56:36Z",
+  "description": "Copyright-free synthetic mascot for the real staging E2E.",
+  "id": "staging-e2e",
+  "isDerivative": false,
+  "license": "MIT",
+  "maintainerUserIds": [
+    "90140161"
+  ],
+  "maintainers": [
+    "qingchenyouforcc"
+  ],
+  "minimumNeurolingsCEVersion": "0.5.1",
+  "name": "Staging E2E",
+  "owner": {
+    "login": "qingchenyouforcc",
+    "userId": "90140161"
+  },
+  "package": {
+    "contentType": "application/octet-stream",
+    "fileName": "staging-e2e-0.1.0.mascot",
+    "sha256": "3429e7880265fec0aa231a342660ce1cbb785d5bf4dcd3d0192df7328bf5af99",
+    "size": 664,
+    "url": "https://github.com/qingchenyouforcc/NeurolingsCE-Mascots-Staging/releases/download/untagged-e4e1a9937669541df9d6/staging-e2e-0.1.0.mascot"
+  },
+  "release": {
+    "assetId": 504731806,
+    "releaseId": 366547997,
+    "tag": "draft/staging-e2e-0.1.0"
+  },
+  "schemaVersion": "1",
+  "submissionId": "a798811599c24c46876aeef3",
+  "summary": "Synthetic end-to-end staging mascot",
+  "tags": [
+    "staging"
+  ],
+  "updatedAt": "2026-08-07T05:56:36Z",
+  "upstream": "",
+  "version": "0.1.0"
+}
