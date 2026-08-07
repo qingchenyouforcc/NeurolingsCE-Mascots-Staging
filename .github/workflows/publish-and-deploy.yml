@@ -151,7 +151,8 @@ jobs:
       - name: Generate index from published releases
         run: |
           python3 tools/generate_index.py . --output generated/index-v1.json \
-            --published-tags-file /tmp/published-tags.json
+            --published-tags-file /tmp/published-tags.json \
+            --registry "$GH_OWNER/$GH_REPO"
       - name: Upload generated index
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

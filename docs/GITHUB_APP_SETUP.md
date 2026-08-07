@@ -116,7 +116,7 @@ Manifest Flow，优先使用 UI 创建两个 staging App。
 - 客户端 staging 配置：
 
   ```text
-  NEUROLINGSCE_MASCOT_INDEX_URL=https://qingchenyouforcc.github.io/NeurolingsCE-Mascots-Staging/index-v1.json
+  NEUROLINGSCE_MASCOT_INDEX_URL=https://blog.qingchenyou.asia/NeurolingsCE-Mascots-Staging/index-v1.json
   NEUROLINGSCE_SUBMISSION_SERVICE_URL=https://<staging 服务 HTTPS 地址>
   ```
 
