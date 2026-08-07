@@ -33,7 +33,8 @@ jobs:
             /tmp/neurolingsce
           sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build build-essential \
-            libgl1 libegl1 libfontconfig1 libdbus-1-3 \
+            libgl1 libegl1 libgl1-mesa-dev libglu1-mesa-dev \
+            libfontconfig1 libdbus-1-3 \
             libxkbcommon-x11-0 libxcb-cursor0
           pip install --quiet aqtinstall
           python3 -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 -O /opt/qt
