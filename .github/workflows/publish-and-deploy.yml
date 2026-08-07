@@ -32,7 +32,7 @@ jobs:
             https://github.com/${{ vars.VALIDATOR_REPO || 'qingchenyouforcc/NeurolingsCE' }}.git \
             /tmp/neurolingsce
           sudo apt-get update -qq
-          sudo apt-get install -y -qq qt6-base-dev ninja-build
+          sudo apt-get install -y -qq qt6-base-dev qttools6-dev ninja-build
           cmake -S /tmp/neurolingsce -B /tmp/neurolingsce-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/neurolingsce-build --target NeurolingsCECli --parallel 2

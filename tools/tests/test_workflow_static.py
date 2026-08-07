@@ -125,9 +125,11 @@ class WorkflowStaticTest(unittest.TestCase):
                 self.assertIn("'qingchenyouforcc'", text)
                 self.assertIn("'NeurolingsCE-Mascots'", text)
 
-    def test_cleanup_does_not_checkout_pr_code(self):
+    def test_cleanup_checks_out_base_sha_only(self):
         text = "\n".join(workflow_lines("cleanup-submissions.yml"))
-        self.assertNotIn("actions/checkout", text)
+        self.assertIn("actions/checkout", text)
+        self.assertIn("github.event.pull_request.base.sha", text)
+        self.assertNotIn("github.event.pull_request.head.sha", text)
 
     def test_only_automatic_github_token_used(self):
         for path in sorted(WORKFLOW_DIR.glob("*.yml")):
