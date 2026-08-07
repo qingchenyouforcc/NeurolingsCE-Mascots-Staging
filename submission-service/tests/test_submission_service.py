@@ -680,6 +680,11 @@ class SubmissionServiceTest(unittest.TestCase):
             written["package"]["sha256"],
             hashlib.sha256(self.valid.read_bytes()).hexdigest(),
         )
+        self.assertEqual(
+            written["package"]["url"],
+            "https://github.com/qingchenyouforcc/NeurolingsCE-Mascots/"
+            "releases/download/draft/sample-1.0.0/valid.mascot",
+        )
         self.assertNotIn("status", written)
         self.assertEqual(written["owner"], {"userId": "1", "login": "octocat"})
         self.assertEqual(written["maintainerUserIds"], ["1"])

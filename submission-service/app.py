@@ -1407,7 +1407,11 @@ class SubmissionService:
     def _build_manifest(self, metadata: dict, mid: str, version: str,
                         sha256: str, uploaded, content_type: str,
                         submission: dict, now: str, ownership: dict) -> dict:
-        asset_url = submission.get("release", {}).get("assetUrl", "")
+        release_tag = submission.get("release", {}).get("tag", "")
+        asset_url = (
+            f"https://github.com/{self.config.owner}/{self.config.repo}"
+            f"/releases/download/{release_tag}/{uploaded.file_name}"
+        )
         return {
             "schemaVersion": "1",
             "id": mid,

@@ -261,6 +261,28 @@ class RegistryToolsTest(unittest.TestCase):
         )
         self.assertEqual([item["id"] for item in index["mascots"]], ["sample"])
 
+    def test_index_download_url_derived_from_release_tag(self):
+        manifest = valid_manifest()
+        manifest["release"] = {
+            "releaseId": 42,
+            "assetId": 7,
+            "tag": "draft/sample-1.2.3",
+        }
+        manifest["package"]["url"] = (
+            "https://github.com/owner/repo/releases/download/"
+            "untagged-deadbeef/sample.mascot"
+        )
+        write_manifest(self.root, "sample", manifest)
+        index = build_index(
+            self.root, "2026-08-06T00:00:00Z", "test/registry",
+            published_tags={"draft/sample-1.2.3"},
+        )
+        self.assertEqual(
+            index["mascots"][0]["download"]["url"],
+            "https://github.com/test/registry/releases/download/"
+            "draft/sample-1.2.3/sample.mascot",
+        )
+
     def test_index_excludes_unpublished_release(self):
         manifest = valid_manifest()
         manifest["status"] = "draft"

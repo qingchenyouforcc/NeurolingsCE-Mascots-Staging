@@ -21,6 +21,26 @@ from validate_registry import main as validate_main  # noqa: E402
 DEFAULT_REGISTRY = "qingchenyouforcc/NeurolingsCE-Mascots"
 
 
+def _published_download_url(registry: str, manifest: dict) -> str:
+    """Derive the canonical published asset URL from the release tag.
+
+    The manifest's package.url may have been captured while the release was
+    still a draft (GitHub returns an ``untagged-<sha>`` download path that
+    404s after publishing). The tag-based URL is canonical and works for
+    both draft-slash tags and normal tags.
+    """
+    release = manifest.get("release") or {}
+    package = manifest.get("package") or {}
+    tag = release.get("tag")
+    file_name = package.get("fileName")
+    if isinstance(tag, str) and isinstance(file_name, str) and file_name:
+        return (
+            f"https://github.com/{registry}/releases/download/"
+            f"{tag}/{file_name}"
+        )
+    return package.get("url", "")
+
+
 def build_index(root: Path, generated_at: str, registry: str,
                 published_tags: set[str] | None = None) -> dict:
     """Build the index deterministically.
@@ -41,7 +61,9 @@ def build_index(root: Path, generated_at: str, registry: str,
                 continue
         elif manifest.get("status") == "draft":
             continue
-        mascots.append(load_index_entry(manifest))
+        entry = load_index_entry(manifest)
+        entry["download"]["url"] = _published_download_url(registry, manifest)
+        mascots.append(entry)
     mascots.sort(key=lambda item: item["id"])
     return {
         "schemaVersion": 1,
