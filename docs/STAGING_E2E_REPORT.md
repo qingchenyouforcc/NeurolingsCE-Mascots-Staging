@@ -334,3 +334,151 @@ Publisher 私钥、session secret、签名下载 URL。
 - `staging-e2e 0.1.1` 更新投稿与 `0.1.0` 重复版本拒绝；
 - `staging-cleanup-test 0.1.0` 独立 cleanup 投稿；
 - 投稿服务 HTTPS 公网部署（当前仅 localhost production）。
+
+---
+
+## 追加：最终 staging E2E 完成轮（2026-08-07）
+
+### 1. HTTPS Submission Service（真实）
+
+- 公网 HTTPS：`https://diego-antibody-cups-planes.trycloudflare.com`
+  （Cloudflare Quick Tunnel，本轮有效）；`GET /healthz` 经 localhost
+  `8123` 与公网 HTTPS 均返回 `{"ok": true}`。
+- `SUBMISSION_ENV=production`；启动自检通过（validator 为真实
+  Release `NeurolingsCE-cli`）；持久存储
+  `D:\CPP_project\NeurolingsCE\.tmp\svc-data` 使用中。
+- 固定 `SUBMISSION_SESSION_SECRET` 存于 git 忽略的
+  `.secrets/.env.svc`（≥32 字节随机熵，未输出、未提交）。
+- 服务日志对 Authorization 等敏感值脱敏（`[REDACTED]`）。
+
+### 2. staging Release 客户端
+
+- 独立 `build-staging-release`（Release，Qt 6.8.3），编译期注入
+  staging index URL / submission service URL / Login App Client ID。
+- 真实 Store：索引加载、`staging-e2e 0.1.0` 可见、下载 664 字节、
+  SHA-256 `3429e788…`、安装成功、重启后仍存在（前轮完成；本轮再次
+  确认模板数 8，含 Staging E2E）。
+
+### 3. 真实 Device Flow（客户端 UI）
+
+- 客户端“Submit a mascot...”自动发起 Device Flow：浏览器输入
+  user code 授权后，客户端执行 `GET /user` 并显示
+  `Signed in as qingchenyouforcc`（numeric user id `90140161`）。
+- 客户端重启后凭据存储自动恢复登录（无需再次授权）。
+
+### 4. 真实 UI 投稿 0.1.1（含最小修复）
+
+- 真实发现：客户端投稿对话框的 `authors` 缺少 `githubUserId`，
+  服务端强制校验 numeric ID 时会失败。最小修复（主仓库工作树，
+  本轮未提交）：
+  `GitHubAuthManager::UserInfo` 增加 `userId`（解析 `GET /user` 的
+  `id`）；投稿对话框 `authors[0]` 发送 `githubUserId`；
+  `AppCoreTests` mock 补齐 `id`。
+- 修复后 Release CTest 2/2 通过；此前一次 `0xc0000374` 已确认是
+  mock 缺 `id` 导致测试失败路径的堆损坏，修正后消失（非 KI-1 复现）。
+- 投稿结果：PR #5（head `128146afa…`）、Draft Release `366588042`、
+  Asset `504833209`（671 字节）、`package-validation`（app
+  `4513799`，check run `92802740963`）success、`registry-checks`
+  （app `15368`，check run `92802734640`）success。
+- 合并后 main manifest：owner/maintainer numeric ID 均为
+  `90140161`，login 与 session 一致，源 manifest 不含 `status` 字段，
+  package sha256 `67f09a7c…`、size 671。
+
+### 5. Maintainer numeric ID 权限（真实）
+
+- `0.1.1 > 0.1.0` 且会话 numeric ID `90140161` 属于
+  `maintainerUserIds` → 更新成功。
+- login 只作显示；owner/authors/maintainers 的 login 由服务端按
+  numeric ID 同步刷新。
+
+### 6. 重复 0.1.0 拒绝（真实）
+
+- 修复前实测：内容哈希去重先于版本检查命中，返回旧 submission
+  （“Submitted. Review PR 4.”）——不满足错误语义。
+- 最小修复（commit `2a530f2` + 回归测试）：把注册表版本/所有权检查
+  移到内容去重之前。
+- 修复后真实客户端重复提交 0.1.0：
+  `Submission failed (version_not_higher): new version '0.1.0' must be
+  strictly higher than the published version '0.1.1'`（服务日志
+  `POST /v1/submissions → 409 version_not_higher`）。
+- 确认：无新 PR、无新 Draft、存储无新增记录、已发布 0.1.0/0.1.1
+  不受影响。
+
+### 7. 发布 0.1.1（真实）
+
+- PR #5 以 **staging-only 管理员 bypass** 合并（`enforce_admins=false`，
+  单账号无法 self-review；merge commit `65ae460d`）。
+- push 触发 publish-and-deploy run `31158809938`：publish_releases /
+  generate_index / deploy_pages 全 **success**。
+- Release `366588042`：`draft=false`、`published_at=
+  2026-08-07T07:45:56Z`；asset 仍为 `504833209`。
+- HTTPS 索引 `generatedAt=2026-08-07T07:46:09Z`：`staging-e2e`
+  `0.1.1`、`status=published`、`sha256=67f09a7c…`、size 671、
+  下载 URL 为 tag 路径。
+
+### 8. 客户端更新测试（真实）
+
+- Store 刷新 → “Loaded 1 mascots from the registry.”，列表显示
+  `Staging E2E v0.1.1`；点击 Install → “Installed Staging E2E.”。
+- 安装文件 671 字节，SHA-256 `67f09a7c…` 与索引一致；重启客户端后
+  文件与模板列表（含 Staging E2E）仍存在。
+
+### 9. Cleanup E2E（真实，含缺陷修复）
+
+- `staging-cleanup-test 0.1.0` 客户端 UI 投稿：PR #6（head
+  `273c11e8…`）、Draft Release `366596003`、Asset `504851300`、
+  两个 required check 均 success。
+- 关闭 PR #6（不合并）→ cleanup run `31159513345` attempt 1
+  **success**：Draft Release 与 submission 分支均删除（API 404）。
+- 幂等重跑 attempt 2 **失败**：GitHub 对已删除 ref 再次 DELETE 返回
+  `422 Reference does not exist`，而 `delete_branch_ref` 只吞 404。
+- 修复（commit `7097181` + 回归测试；tools tests 82 OK）：把
+  `422 Reference does not exist` 视为分支已不存在。
+- 修复后用真实 API 执行 `verify_and_cleanup_submission_pr(PR #6)`：
+  `verified=true, reason=release_already_absent`（不再抛异常）。
+- 探针 PR #7（`submission/idempotency-probe-0.1.0`，fake releaseId
+  `999999`）验证新代码：cleanup run `31160010847` attempt 1 success
+  （删除分支）；`gh run rerun` attempt 2 **success**（日志
+  `{"verified": true, "reason": "release_already_absent", ...}`）。
+- 说明：旧 run 的 rerun（attempt 3）仍回放原 SHA、使用旧代码并失败，
+  属 GitHub rerun 语义；新代码已合入 main，后续新 run 生效。
+
+### 10. workflow_dispatch 恢复测试（真实）
+
+- dispatch run `31160156436`（head `7097181`）：三 job 全 success。
+- publish 摘要：`{"alreadyPublished": 1, "published": 0,
+  "skippedWithoutReleaseMetadata": 0}`——0.1.1 已发布则跳过。
+- 仓库 Release 仍只有 0.1.0 / 0.1.1 各一个（各 1 asset），无重复创建；
+  索引重新生成并重新部署（`generatedAt=08:05:42Z`），内容正确。
+
+### 11. 本地测试（本轮实际运行）
+
+- `tools/tests`：82 OK（含新增 cleanup 422 幂等回归）。
+- `submission-service/tests`：76 OK（1 skip；含新增
+  published-version 重提回归）。
+- `tools/validate_registry.py . --json`：`{"errors": [], "ok": true}`。
+- `tools/generate_index.py .`：成功写出 `generated/index-v1.json`。
+- 主仓库 Release：构建成功；CTest 2/2 通过（NeurolingsCETests、
+  NeurolingsCEBubbleTests）。
+
+### 12. KI-1（不处理，按任务要求保持现状）
+
+- 状态：**Unresolved**；客户端正式发布 = **Blocked**。
+- 本轮真实观察：staging Release 客户端 15:46 启动出现一次未捕获
+  SEH `0xC0000005`（进程退出），第二次启动正常——作为 KI-1 的
+  非确定性复现记录，不视为已解决。
+- 一次 Release CTest `0xc0000374` 经排查为测试 mock 缺 `id` 的失败
+  路径所致，修正后消失，不归因 KI-1。
+
+### 13. 最终上线状态
+
+| 环节 | 状态 |
+| --- | --- |
+| Registry staging | **Ready**（真实投稿/校验/发布/索引/Pages/cleanup 全通过） |
+| Submission service staging | **Ready**（HTTPS 公网、production、固定 secret、持久存储） |
+| Client private testing | **Ready**（Store 安装/更新/重启持久化真实通过） |
+| Public mascot submissions | **Conditionally ready**（真实全流程已跑通；公开前仍需生产策略与对外发布 gate） |
+| Client public release | **Blocked**（KI-1 未解决） |
+
+本文件仍不包含任何 token、私钥、session secret、Authorization 或
+签名下载 URL。
