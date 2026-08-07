@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "1",
+  "id": "checkrun-probe",
+  "name": "Check Run Probe",
+  "version": "0.1.0",
+  "summary": "Probe for the Publisher App package-validation check",
+  "description": "Temporary probe manifest; no real release attached.",
+  "authors": [
+    {
+      "githubLogin": "qingchenyouforcc",
+      "githubUserId": "90140161",
+      "displayName": "Qingchen You"
+    }
+  ],
+  "maintainers": [
+    "qingchenyouforcc"
+  ],
+  "maintainerUserIds": [
+    "90140161"
+  ],
+  "owner": {
+    "userId": "90140161",
+    "login": "qingchenyouforcc"
+  },
+  "license": "MIT",
+  "isDerivative": false,
+  "minimumNeurolingsCEVersion": "0.5.1",
+  "package": {
+    "fileName": "checkrun-probe.mascot",
+    "url": "https://github.com/qingchenyouforcc/NeurolingsCE-Mascots-Staging/releases/download/draft/checkrun-probe-0.1.0/checkrun-probe.mascot",
+    "size": 1,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "contentType": "application/octet-stream"
+  },
+  "tags": [
+    "staging"
+  ],
+  "categories": [
+    "test"
+  ],
+  "createdAt": "2026-08-07T00:00:00Z",
+  "updatedAt": "2026-08-07T00:00:00Z",
+  "release": {
+    "releaseId": 1,
+    "assetId": 1,
+    "tag": "draft/checkrun-probe-0.1.0"
+  },
+  "submissionId": "c0ffeec0ffeec0ffeec0ffee"
+}
