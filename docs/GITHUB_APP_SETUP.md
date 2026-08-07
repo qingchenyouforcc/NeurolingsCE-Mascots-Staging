@@ -60,17 +60,28 @@ Repository permissions（最小化，唯一需要的权限）：
 Metadata: Read-only
 Contents: Read and write
 Pull requests: Read and write
+Checks: Read and write
 ```
 
 说明：
 
 - 不需要独立的 `Releases: Write`（Release API 由 Contents 覆盖）；
+- `Checks: Read and write` 的唯一用途：投稿服务在投稿分支的精确
+  head SHA 上创建/更新 `package-validation` Check Run；不用于修改
+  Actions workflow，也不用于客户端；
 - 不申请 `Workflows: Write`、邮箱/组织/私有仓库等权限；
 - Publisher App 的 Client ID **不用于桌面 Device Flow**，桌面客户端永远
   不能获得 Publisher App 的 user access token；
 - 生产只安装到 `qingchenyouforcc/NeurolingsCE-Mascots`；staging 只安装到
   `qingchenyouforcc/NeurolingsCE-Mascots-Staging`；
 - 私钥 PEM 只存在于投稿服务端，绝不进入客户端或仓库。
+
+## GitHub App 创建方式
+
+GitHub App **不能通过普通已认证 REST 请求直接创建**；维护者可以通过
+GitHub UI 创建，也可以采用 GitHub App Manifest Flow，但 Manifest Flow
+仍需要浏览器授权和一次性 code 交换。本仓库不要求为自动化实现
+Manifest Flow，优先使用 UI 创建两个 staging App。
 
 记录：
 
@@ -98,7 +109,8 @@ Pull requests: Read and write
   不安装到任何仓库。
 - Publisher App：建议名称 `NeurolingsCE Mascot Publisher Staging`，
   Repository permissions 同上（Metadata: Read-only、Contents: Read and
-  write、Pull requests: Read and write），只安装到 staging 仓库。
+  write、Pull requests: Read and write、Checks: Read and write），
+  只安装到 staging 仓库。
 - 仓库 Actions Variables（未设置时 workflow 回退到生产默认值）：
   `REGISTRY_OWNER`、`REGISTRY_REPO`、`VALIDATOR_REPO`。
 - 客户端 staging 配置：
@@ -110,3 +122,15 @@ Pull requests: Read and write
 
 - 所有 secret（Publisher 私钥、session secret）只存在于 staging 服务
   环境，不写入源码、仓库或聊天。
+
+## 分支保护：检查来源固定
+
+main 分支保护使用 branch protection API 的 `checks` 对象，按
+`context` + `app_id` 固定检查来源，而不是只按字符串要求：
+
+- `registry-checks`：来源固定为 GitHub Actions App（先查询实际
+  `app.id` 再写入）；
+- `package-validation`：来源固定为 Publisher App 的 App ID（创建 App
+  后从 Check Run 响应或 `GET .../check-runs` 查询 `app.id`）。
+
+同名但来源错误的 status/check 不能满足 required check。

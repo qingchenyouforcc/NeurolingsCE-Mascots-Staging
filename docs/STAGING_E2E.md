@@ -8,10 +8,12 @@
 
 - 私钥与 token 不写入源码、不粘贴到聊天、不落日志；staging 使用独立
   测试仓库、测试 App、测试账号与测试 mascot，与生产完全隔离。
-- PR validation 阶段若只读 `GITHUB_TOKEN` 无法读取 Draft asset：
-  不提升 workflow 权限、不提前公开 Draft Release，**立即停止 E2E**，
-  记录三个 API 的真实响应，输出可选替代方案及其权限边界，等待维护者
-  决策。
+- 已由真实测试确认：`pull_request` workflow 的只读 `GITHUB_TOKEN`
+  **不能读取 Draft Release（403）**；本轮架构不再尝试该路径。
+- 以下任一情况立即停止公开投稿 E2E：Publisher App 无法创建
+  Check Run；required check 无法绑定 Publisher App ID；Publisher App
+  下载 Draft asset 失败；validator 无法隔离敏感环境；publish workflow
+  无法二次验证；Pages 无法提供 HTTPS。
 - 每一步记录真实结果（workflow event、HTTP 状态、最终 host、
   SHA-256），不得把 mock 结果填入“真实结果”。
 
@@ -51,7 +53,9 @@
 ## 2. Publisher App（仅安装到测试仓库）
 
 - New GitHub App；Repository permissions 最小化：
-  Contents Read/Write、Metadata Read、Pull requests Read/Write。
+  Contents Read/Write、Metadata Read、Pull requests Read/Write、
+  Checks Read/Write（Checks 仅用于在 PR head SHA 创建/更新
+  `package-validation` Check Run）。
 - 仅安装到测试 Registry 仓库，不授予组织级或仓库外权限。
 - 记录 `App ID`、`Installation ID`，私钥 PEM 只放在服务端 Secret
   （`GITHUB_PUBLISHER_PRIVATE_KEY_PATH`），不入库。
@@ -79,7 +83,7 @@ python submission-service/app.py
 - Settings → Pages → Source：GitHub Actions（部署来自
   `publish-and-deploy.yml` 的 artifact）。
 - Settings → Branches → main：开启保护，要求 PR 与 required status
-  checks（含 `pr-validation`），禁止直接 push。
+  checks（`registry-checks` + `package-validation`），禁止直接 push。
 
 ```bash
 gh api -X POST repos/qingchenyouforcc/NeurolingsCE-Mascots-Staging/pages \
@@ -89,7 +93,10 @@ gh api -X PUT repos/qingchenyouforcc/NeurolingsCE-Mascots-Staging/branches/main/
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["registry-checks", "package-validation"]
+    "checks": [
+      {"context": "registry-checks", "app_id": <GitHub Actions App ID>},
+      {"context": "package-validation", "app_id": <Publisher App ID>}
+    ]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": {
@@ -102,7 +109,12 @@ gh api -X PUT repos/qingchenyouforcc/NeurolingsCE-Mascots-Staging/branches/main/
 JSON
 ```
 
+> App ID 通过真实查询获得：`registry-checks` 从 GitHub Actions 运行的
+> check-run `app.id` 读取；`package-validation` 从 Publisher App 创建的
+> Check Run 响应读取。未拿到 App ID 前不得退化为字符串 context。
 > Pages 在 Free 账号下要求仓库为 public；如必须私有，需 Pro 及以上套餐。
+> Pages 必须启用 HTTPS（`https_enforced=true` 或使用 GitHub 默认
+> `*.github.io` HTTPS 地址），客户端不接受公网 HTTP。
 
 ## 5. 真实 Device Flow
 
@@ -136,27 +148,27 @@ manifest → 开 PR。逐项核对并记录：
   （必须为否）；仍为 HTTPS；
 - 下载内容 SHA-256 与 manifest `package.sha256` 一致。
 
+上述三个 API 由**投稿服务**用 Publisher App installation token 执行
+（不是 PR workflow），并与 `VALIDATOR_CLI` 结果一起写入
+`package-validation` Check Run 的 output。
+
 ## 8. PR validation（必须记录的真实结果）
 
 等待 PR check。必须记录：
 
-- workflow event（`pull_request`）与 Actions run id；
-- job 的 `GITHUB_TOKEN` permissions（`contents: read` +
-  `pull-requests: read`，不得更宽）；
-- `GET /repos/<owner>/<repo>/releases/<release_id>`：HTTP 状态码、
-  Draft Release 是否可见（`draft` 值；匿名访问必须不可见）；
-- `GET /repos/<owner>/<repo>/releases/<release_id>/assets`：HTTP 状态码
-  与分页；
-- `GET /repos/<owner>/<repo>/releases/assets/<asset_id>`：HTTP 状态码
-  （200 或 302）；
-- 302 时最终 host（例如 `objects.githubusercontent.com`）与 token 是否
-  被转发（必须为否）；
-- 下载文件 SHA-256；
-- PR check 最终状态（success/failure）与失败原因。
+- Actions `registry-checks`：workflow event（`pull_request`）、run id、
+  `GITHUB_TOKEN` permissions（`contents: read` + `pull-requests: read`）、
+  check conclusion；
+- Publisher App `package-validation` Check Run：check run ID、
+  `app.id`（必须等于 Publisher App ID）、`external_id`
+  （`neurolingsce-submission:<submission-id>:<head-sha>`）、绑定的
+  `head_sha`、status/conclusion、output 摘要；
+- 三个 Draft API 的真实响应记录在投稿服务日志/报告（见第 7 节）；
+- 错误来源的同名 status/check 不满足分支保护（来源固定 app_id）。
 
-**Gate**：若只读 `GITHUB_TOKEN` 读取 Draft asset 返回 403/404，按
-“原则”停止；替代方案（例如用 Publisher App 安装 token 的独立发布
-workflow）必须说明其权限边界，未经维护者批准不得实施。
+**Gate**：若 `package-validation` Check Run 无法创建、`app.id` 不是
+Publisher App、或 Check Run 失败，PR 不可合并；不提升 workflow 权限、
+不注入私钥、不提前发布。
 
 ## 9. 合并 PR
 
@@ -169,7 +181,8 @@ workflow）必须说明其权限边界，未经维护者批准不得实施。
   （`contents: write` / `contents: read` / `pages: write` +
   `id-token: write`）。
 - `publish_releases`：验证 asset 后 PATCH draft → published，记录
-  `GET release` 返回 `draft: false`。
+  `GET release` 返回 `draft: false`；发布前真实下载、SHA-256 与
+  `NeurolingsCE-cli` 二次验证，任一失败则保持 draft 并停止。
 - `generate_index`：读取已发布 tag 生成 `index-v1.json` 并上传 artifact。
 - `deploy_pages`：部署成功后记录 Pages URL 与索引条目
   `status: published`。
@@ -189,7 +202,8 @@ workflow）必须说明其权限边界，未经维护者批准不得实施。
 - 同幂等键重复上传 → 返回原 submission；
 - 非法 ID / 越界 changed files → PR validation 失败；
 - asset SHA-256 与 manifest 不符 → fail closed；
-- PR 关闭后 cleanup 只删验证过的 draft release；
+- PR 关闭后 cleanup 只删验证过的 draft release 与对应 submission
+  分支；
 - cleanup 重复执行 / 迟到 → 不误删已发布 release；
 - GitHub API 429 → 尊重 `Retry-After`；
 - publish workflow 重跑 → 幂等；

@@ -74,10 +74,25 @@ python submission-service/app.py
   默认值：`REGISTRY_OWNER=qingchenyouforcc`、
   `REGISTRY_REPO=NeurolingsCE-Mascots`、`VALIDATOR_REPO=qingchenyouforcc/NeurolingsCE`；
   staging 仓库必须显式设置这三个 Variables。
+- PR workflow（`pr-validation.yml`）只产生 `registry-checks`，**不下载
+  Draft asset**；Draft asset 的下载、SHA-256 与 CLI 再验证由投稿服务
+  用 Publisher App installation token 完成，并以同名
+  `package-validation` Check Run 报告（绑定 PR head SHA）。
+- `publish_releases` 在发布前**再次**下载并验证每个 Draft asset
+  （大小、SHA-256、真实 `NeurolingsCE-cli`），全部通过才
+  PATCH `draft=false`；失败则保持 draft、不生成索引、不部署 Pages、
+  不回写 main。
+- main 分支保护使用 `checks` 对象按 `context` + `app_id` 固定检查来源：
+  `registry-checks` → GitHub Actions App；`package-validation` →
+  Publisher App。
 - 源 manifest 不保存可推导的 `status`；`index-v1.json` 条目写入派生值
   `status: published`。
 - 所有权：`owner.userId` 与 `maintainerUserIds`（GitHub numeric user ID）
   是权限依据；login 仅用于展示，改名不丢失权限。
 - 第三方 Action 全部固定到完整 commit SHA；每个 workflow 显式声明最小
   permissions；除自动生成的 `GITHUB_TOKEN` 外不读取配置的 Secrets。
+- 投稿服务运行 validator 时使用清理后的最小环境（不继承
+  `GITHUB_*TOKEN*`、`AUTHORIZATION`、`COOKIE`、
+  `SUBMISSION_SESSION_SECRET`、Publisher 私钥路径等），随机临时目录、
+  超时/输出/资源限制、fail closed。
 - staging 端到端流程见 `STAGING_E2E.md`。

@@ -47,8 +47,8 @@
 
 各 workflow 只使用自动 `GITHUB_TOKEN`：
 
-- PR 验证：`contents: read` + `pull-requests: read`，仅用于 API 读取、
-  认证下载 Draft asset；
+- PR 验证（`registry-checks`）：`contents: read` + `pull-requests: read`，
+  仅做注册表/清单检查，**不下载 Draft asset**；
 - 发布与部署（合并 workflow `publish-and-deploy.yml`）：
   - `publish_releases`：`contents: write`，用于 PATCH Release；
   - `generate_index`：`contents: read`，仅用于读取已发布 tag；
@@ -59,17 +59,33 @@
     顺序不保证等于 push 顺序，每次运行都按执行时真实 Release 状态
     幂等收敛。
 - 清理：`contents: write` + `pull-requests: read`，用于核对并删除
-  验证过的 draft release。
+  验证过的 draft release 与 submission 分支。
 
 PR 验证的信任边界：
 
 - checkout 固定 `pull_request.base.sha`，不 checkout PR head；
 - 不执行 PR 分支中的任何 Python/shell/workflow/CMake/可执行文件；
-- changed files、manifest、release、asset 全部通过 GitHub API 读取并
-  白名单校验；
-- Draft asset 只通过 Release Asset API 认证下载，token 不传给验证器、
-  不打印 Authorization；
-- 验证失败即失败，绝不发布 Release。
+- changed files 与 PR head manifest 全部通过 GitHub API 读取并白名单
+  校验（只允许一个 `mascots/<id>/manifest.json`）；
+- 不读取 Publisher 私钥，不使用 Publisher installation token。
+
+投稿服务（Publisher App）信任边界：
+
+- Publisher App 权限：Metadata Read-only、Contents Read/Write、
+  Pull requests Read/Write、Checks Read/Write；`Checks` 仅用于在 PR
+  head SHA 上创建/更新 `package-validation` Check Run；
+- 投稿服务用 installation token 重新下载 Draft asset，重新计算大小与
+  SHA-256，并调用生产 `VALIDATOR_CLI`（隔离环境、清理敏感环境变量、
+  超时/输出/资源限制、fail closed）；
+- Check Run 失败或中途崩溃时保持 `in_progress`/失败，PR 不可合并；
+  重试按 submission id + head SHA + external ID 幂等恢复。
+
+main 分支保护：
+
+- `checks` 对象按 `context` + `app_id` 固定来源：`registry-checks` →
+  GitHub Actions App；`package-validation` → Publisher App；同名但来源
+  错误的 status/check 不满足 required check；
+- `strict: true`、required PR review、禁止 force push/deletion。
 
 ## 发布状态与所有权
 
@@ -77,7 +93,9 @@ PR 验证的信任边界：
   `index-v1.json` 写入派生 `status: published`。
 - 权限依据是 GitHub numeric user ID（`owner.userId`/`maintainerUserIds`）；
   login 改名不丢失权限，login 相同但 numeric ID 不同不获得权限；
-  修改 maintainers/owner 必须经现有 maintainer 或管理员批准。
+ 修改 maintainers/owner 必须经现有 maintainer 或管理员批准。
+- 发布前二次验证：`publish_releases` 重新下载 Draft asset、校验大小/
+  SHA-256/CLI，全部通过才发布；失败不部署索引与 Pages。
 
 ## 密钥处理
 
