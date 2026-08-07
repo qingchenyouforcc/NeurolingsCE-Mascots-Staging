@@ -26,6 +26,16 @@ MAX_ENTRY_COUNT = 4096
 MAX_VALIDATOR_OUTPUT_BYTES = 1024 * 1024
 MAX_VALIDATOR_ERROR_LENGTH = 500
 
+_SENSITIVE_ENV_PATTERNS = (
+    "TOKEN",
+    "SECRET",
+    "AUTHORIZATION",
+    "COOKIE",
+    "PRIVATE_KEY",
+    "PASSWORD",
+    "CREDENTIAL",
+)
+
 FORBIDDEN_EXTENSIONS = {
     ".exe", ".dll", ".com", ".bat", ".cmd", ".ps1", ".sh", ".js", ".vbs",
     ".lnk", ".scr", ".pif", ".msi", ".msp", ".hta", ".jar",
@@ -160,22 +170,76 @@ def _read_output_limited(process, max_bytes: int,
     result["stdout"] = b"".join(chunks)
 
 
+def _scrubbed_env() -> dict:
+    """Environment for the validator: never inherits service secrets."""
+    env = dict(os.environ)
+    for key in list(env):
+        upper = key.upper()
+        if any(pattern in upper for pattern in _SENSITIVE_ENV_PATTERNS):
+            env.pop(key, None)
+    env.pop("GITHUB_PUBLISHER_APP_ID", None)
+    env.pop("GITHUB_PUBLISHER_INSTALLATION_ID", None)
+    env.pop("GITHUB_PUBLISHER_PRIVATE_KEY_PATH", None)
+    return env
+
+
+def _limit_resources() -> None:
+    """Best-effort POSIX resource limits for the validator subprocess."""
+    if os.name != "posix":
+        return
+    try:
+        import resource
+
+        resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024,) * 2)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (64 * 1024 * 1024,) * 2)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+        resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+    except (ImportError, ValueError, OSError):
+        pass
+
+
 def run_external_validator(path: Path, cli: str,
                            timeout_seconds: int = 120) -> tuple[bool, list[str]]:
+    """Run the public C++ validator with fail-closed semantics."""
+    ok, errors, _report = run_external_validator_detailed(
+        path, cli, timeout_seconds
+    )
+    return ok, errors
+
+
+def run_external_validator_detailed(
+    path: Path, cli: str, timeout_seconds: int = 120
+) -> tuple[bool, list[str], dict]:
     """Run the public C++ validator with fail-closed semantics.
 
     Any timeout, crash, non-zero exit, malformed JSON, oversized output or
     missing ok=true is a rejection. This function never falls back to the
     embedded Python checks.
     """
+    with tempfile.TemporaryDirectory(
+        prefix="neurolingsce-validator-", ignore_cleanup_errors=True
+    ) as tmp:
+        isolated = Path(tmp) / path.name
+        try:
+            isolated.write_bytes(path.read_bytes())
+        except OSError as exc:
+            return False, [f"public validator input could not be prepared ({exc})"], {}
+        return _run_validator_process(isolated, cli, timeout_seconds)
+
+
+def _run_validator_process(path: Path, cli: str,
+                           timeout_seconds: int) -> tuple[bool, list[str], dict]:
     try:
         process = subprocess.Popen(
             [cli, "--json", "--mascot", "validate", str(path)],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            env=_scrubbed_env(),
+            preexec_fn=_limit_resources if os.name == "posix" else None,
         )
     except OSError as exc:
-        return False, [f"public validator could not be started ({exc})"]
+        return False, [f"public validator could not be started ({exc})"], {}
     result: dict = {"stdout": b"", "overflow": False}
     reader = threading.Thread(
         target=_read_output_limited,
@@ -190,22 +254,35 @@ def run_external_validator(path: Path, cli: str,
         process.wait(timeout=5)
         reader.join(timeout=5)
         process.stdout.close()
-        return False, ["public validator timed out"]
+        return False, ["public validator timed out"], {}
     reader.join(timeout=5)
     process.stdout.close()
     stdout = result["stdout"]
     overflow = result["overflow"]
     if overflow:
-        return False, ["public validator output exceeded the size limit"]
+        process.wait(timeout=5)
+        return (
+            False,
+            ["public validator output exceeded the size limit"],
+            {},
+        )
     if returncode != 0:
         tail = _sanitize_error(stdout[-200:])
-        return False, [f"public validator exited with code {returncode}: {tail}"]
+        return (
+            False,
+            [f"public validator exited with code {returncode}: {tail}"],
+            {},
+        )
     try:
         report = json.loads(stdout.decode("utf-8", "replace"))
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return False, ["public validator returned malformed JSON"]
+        return False, ["public validator returned malformed JSON"], {}
     if not isinstance(report, dict):
-        return False, ["public validator returned a non-object JSON report"]
+        return (
+            False,
+            ["public validator returned a non-object JSON report"],
+            {},
+        )
     ok = report.get("ok")
     if not isinstance(ok, bool) or not ok:
         errors = report.get("errors", [])
@@ -213,8 +290,8 @@ def run_external_validator(path: Path, cli: str,
             sanitized = [_sanitize_error(item) for item in errors]
         else:
             sanitized = ["public validator reported failure"]
-        return False, sanitized
-    return True, []
+        return False, sanitized, report
+    return True, [], report
 
 
 def validator_self_check(cli: str, timeout_seconds: int = 120) -> tuple[bool, str]:
@@ -252,13 +329,25 @@ def validator_self_check(cli: str, timeout_seconds: int = 120) -> tuple[bool, st
 def validate_mascot(path: Path, validator_cli: str | None = None,
                     submission_env: str = "development",
                     validator_timeout_seconds: int = 120) -> tuple[bool, list[str]]:
+    ok, errors, _report = validate_mascot_detailed(
+        path, validator_cli, submission_env, validator_timeout_seconds
+    )
+    return ok, errors
+
+
+def validate_mascot_detailed(
+    path: Path, validator_cli: str | None = None,
+    submission_env: str = "development",
+    validator_timeout_seconds: int = 120,
+) -> tuple[bool, list[str], dict]:
     cli = validator_cli or os.environ.get("VALIDATOR_CLI", "")
     if cli:
-        return run_external_validator(
+        return run_external_validator_detailed(
             path, cli, validator_timeout_seconds
         )
     if submission_env == "production":
         # Should be unreachable because startup rejects missing VALIDATOR_CLI,
         # but fail closed anyway: never fall back to embedded checks.
-        return False, ["production mode requires the public validator"]
-    return embedded_validate(path)
+        return False, ["production mode requires the public validator"], {}
+    ok, errors = embedded_validate(path)
+    return ok, errors, {}

@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -23,7 +24,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app as app_module  # noqa: E402
 from app import Config, ServiceError, SubmissionService  # noqa: E402
 from github_client import GitHubApiError, GitHubClient  # noqa: E402
-from package_checks import run_external_validator  # noqa: E402
+from package_checks import (  # noqa: E402
+    run_external_validator,
+    run_external_validator_detailed,
+)
 from redact import redact_headers, redact_text  # noqa: E402
 
 
@@ -109,7 +113,11 @@ class MockGitHubServer:
         self.user_login = "octocat"
         self.changed_files: list[str] | None = None
         self.release_draft = True
+        self.release_tag = "draft/sample-1.0.0"
         self.created_pr: dict | None = None
+        self.pr_head_sha = "head-sha"
+        self.asset_bytes: bytes = b""
+        self.check_runs: list[dict] = []
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler)
         self._server.mock = self
         self.port = self._server.server_address[1]
@@ -152,14 +160,57 @@ class _MockHandler(BaseHTTPRequestHandler):
             self.wfile.write(b'{"message":"Not Found"}')
             return
         if "/releases" in self.path and self.command == "POST" and "assets" not in self.path:
-            return self._json(201, {"id": 42, "tag_name": "draft/sample-1.0.0", "draft": True})
+            payload = json.loads(body or b"{}")
+            mock.release_tag = payload.get("tag_name", mock.release_tag)
+            return self._json(201, {"id": 42, "tag_name": mock.release_tag, "draft": True})
         if "/assets?" in self.path and self.command == "POST":
+            mock.asset_bytes = body
+            mock.asset_name = urllib.parse.parse_qs(
+                urllib.parse.urlsplit(self.path).query
+            ).get("name", ["sample.mascot"])[0]
             return self._json(201, {
                 "id": 99,
                 "browser_download_url": "https://github.com/owner/repo/releases/download/draft/sample-1.0.0/sample.mascot",
             })
         if "/assets?" in self.path and self.command == "GET":
+            if mock.asset_bytes:
+                return self._json(200, [{
+                    "id": 99,
+                    "name": getattr(mock, "asset_name", "sample.mascot"),
+                    "state": "uploaded",
+                }])
             return self._json(200, [])
+        if "/releases/assets/" in self.path and self.command == "GET":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(mock.asset_bytes)))
+            self.end_headers()
+            self.wfile.write(mock.asset_bytes)
+            return
+        if "/check-runs" in self.path and self.command == "POST":
+            payload = json.loads(body or b"{}")
+            check_run = {
+                "id": 700 + len(mock.check_runs),
+                "name": payload.get("name", ""),
+                "head_sha": payload.get("head_sha", ""),
+                "external_id": payload.get("external_id", ""),
+                "status": "in_progress",
+                "app": {"id": 123},
+            }
+            mock.check_runs.append(check_run)
+            return self._json(201, check_run)
+        if "/check-runs/" in self.path and self.command == "PATCH":
+            payload = json.loads(body or b"{}")
+            check_run = mock.check_runs[-1] if mock.check_runs else {
+                "id": 700, "name": "package-validation", "app": {"id": 123},
+            }
+            check_run.update(payload)
+            return self._json(200, check_run)
+        if "/check-runs" in self.path and self.command == "GET":
+            return self._json(200, {
+                "total_count": len(mock.check_runs),
+                "check_runs": mock.check_runs,
+            })
         if self.path.endswith("/branches/main") and self.command == "GET":
             return self._json(200, {"commit": {"sha": "base-sha"}})
         if self.path.endswith("/git/refs") and self.command == "POST":
@@ -178,9 +229,24 @@ class _MockHandler(BaseHTTPRequestHandler):
             mock.created_pr = {
                 "number": 7,
                 "html_url": "https://github.com/owner/repo/pull/7",
-                "head": {"ref": json.loads(body or b"{}").get("head", "")},
+                "state": "open",
+                "head": {
+                    "ref": json.loads(body or b"{}").get("head", ""),
+                    "sha": mock.pr_head_sha,
+                    "repo": {"full_name": "qingchenyouforcc/NeurolingsCE-Mascots"},
+                },
             }
             return self._json(201, mock.created_pr)
+        if re_match_pull_id(self.path) and self.command == "GET":
+            if mock.created_pr is None:
+                return self._json(200, {
+                    "number": 7, "state": "open",
+                    "head": {
+                        "sha": mock.pr_head_sha,
+                        "repo": {"full_name": "qingchenyouforcc/NeurolingsCE-Mascots"},
+                    },
+                })
+            return self._json(200, mock.created_pr)
         if "/pulls/" in self.path and "/files" in self.path and self.command == "GET":
             files = mock.changed_files
             if files is None:
@@ -190,8 +256,8 @@ class _MockHandler(BaseHTTPRequestHandler):
             return self._json(200, {"state": "closed"})
         if re_match_release_id(self.path) and self.command == "GET":
             if mock.release_draft:
-                return self._json(200, {"id": 42, "tag_name": "draft/sample-1.0.0", "draft": True})
-            return self._json(200, {"id": 42, "tag_name": "draft/sample-1.0.0", "draft": False})
+                return self._json(200, {"id": 42, "tag_name": mock.release_tag, "draft": True})
+            return self._json(200, {"id": 42, "tag_name": mock.release_tag, "draft": False})
         if re_match_release_id(self.path) and self.command == "DELETE":
             self.send_response(204)
             self.end_headers()
@@ -230,6 +296,11 @@ def re_match_release_id(path: str) -> bool:
     return bool(re.match(r"^/repos/[^/]+/[^/]+/releases/[0-9]+$", path.split("?")[0]))
 
 
+def re_match_pull_id(path: str) -> bool:
+    import re
+    return bool(re.match(r"^/repos/[^/]+/[^/]+/pulls/[0-9]+$", path.split("?")[0]))
+
+
 class FakeGitHub:
     """In-process GitHub adapter for fault injection and resume tests."""
 
@@ -241,9 +312,15 @@ class FakeGitHub:
         self.branch: dict | None = None
         self.manifest: dict | None = None
         self.pr: dict | None = None
+        self.pr_head_sha = "head-sha"
+        self.pr_head_sha_seq: list[str] = []
         self.pr_files: list[str] = ["mascots/sample/manifest.json"]
         self.release_draft = True
         self.main_manifest: dict | None = None
+        self.check_runs: list[dict] = []
+        self.asset_bytes: bytes = b""
+        self.asset_sha_mismatch = False
+        self._next_check_run_id = 700
 
     def _record(self, name: str, *args):
         self.calls.append((name, args))
@@ -295,9 +372,11 @@ class FakeGitHub:
                              content_type="application/octet-stream") -> dict:
         self.calls.append(("upload_release_asset", (release_id, file_name)))
         queue = self.faults.get("upload_release_asset")
+        self.asset_bytes = Path(file_path).read_bytes()
         self.asset = {
             "id": 99,
             "name": file_name,
+            "state": "uploaded",
             "browser_download_url": "https://github.com/owner/repo/releases/download/draft/sample-1.0.0/sample.mascot",
         }
         if queue:
@@ -350,11 +429,40 @@ class FakeGitHub:
     def create_pull_request(self, token, title, head, base, body) -> dict:
         self.calls.append(("create_pull_request", (head,)))
         queue = self.faults.get("create_pull_request")
-        self.pr = {"number": 7, "html_url": "https://github.com/owner/repo/pull/7",
-                   "head": {"ref": head}}
+        self.pr = {
+            "number": 7, "html_url": "https://github.com/owner/repo/pull/7",
+            "state": "open",
+            "head": {
+                "ref": head,
+                "sha": self.pr_head_sha,
+                "repo": {"full_name": "owner/repo"},
+            },
+        }
         if queue:
             raise queue.pop(0)
         return self.pr
+
+    def get_pull_request(self, token, pr_number: int) -> dict:
+        self._record("get_pull_request", pr_number)
+        sha = self.pr_head_sha
+        if self.pr_head_sha_seq:
+            sha = self.pr_head_sha_seq.pop(0)
+        if self.pr is None:
+            return {
+                "number": pr_number,
+                "state": "open",
+                "head": {
+                    "sha": sha,
+                    "repo": {"full_name": "owner/repo"},
+                },
+            }
+        view = dict(self.pr)
+        head = dict(view.get("head", {}))
+        head["sha"] = sha
+        head["repo"] = {"full_name": "owner/repo"}
+        view["head"] = head
+        view.setdefault("state", "open")
+        return view
 
     def get_pull_request_files(self, token, pr_number: int) -> list[str]:
         self._record("get_pull_request_files", pr_number)
@@ -366,6 +474,62 @@ class FakeGitHub:
     def get_release(self, token, release_id: int) -> dict | None:
         self._record("get_release", release_id)
         return self._release_view()
+
+    def get_check_runs_for_head(self, token, head_sha: str) -> list[dict]:
+        self._record("get_check_runs_for_head", head_sha)
+        return [
+            run for run in self.check_runs
+            if run.get("head_sha") == head_sha
+        ]
+
+    def create_check_run(self, token, head_sha, name, external_id) -> dict:
+        self.calls.append(("create_check_run", (head_sha, name, external_id)))
+        queue = self.faults.get("create_check_run")
+        check_run = {
+            "id": self._next_check_run_id,
+            "name": name,
+            "head_sha": head_sha,
+            "external_id": external_id,
+            "status": "in_progress",
+            "app": {"id": 123},
+        }
+        self._next_check_run_id += 1
+        self.check_runs.append(check_run)
+        if queue:
+            raise queue.pop(0)
+        return check_run
+
+    def update_check_run(self, token, check_run_id, status=None,
+                         conclusion=None, output=None) -> dict:
+        self.calls.append((
+            "update_check_run",
+            (check_run_id, status, conclusion),
+        ))
+        queue = self.faults.get("update_check_run")
+        for run in self.check_runs:
+            if run.get("id") == check_run_id:
+                if status:
+                    run["status"] = status
+                if conclusion:
+                    run["conclusion"] = conclusion
+                if output:
+                    run["output"] = output
+                break
+        if queue:
+            raise queue.pop(0)
+        return next(
+            (run for run in self.check_runs if run.get("id") == check_run_id),
+            {},
+        )
+
+    def download_release_asset(self, token, release_id, asset_id, dest,
+                               expected_sha256, expected_size=None) -> None:
+        self.calls.append(("download_release_asset", (release_id, asset_id)))
+        queue = self.faults.get("download_release_asset")
+        data = b"tampered-bytes" if self.asset_sha_mismatch else self.asset_bytes
+        dest.write_bytes(data)
+        if queue:
+            raise queue.pop(0)
 
     def delete_release(self, token, release_id: int) -> None:
         self._record("delete_release", release_id)
@@ -520,6 +684,19 @@ class SubmissionServiceTest(unittest.TestCase):
         self.assertEqual(written["owner"], {"userId": "1", "login": "octocat"})
         self.assertEqual(written["maintainerUserIds"], ["1"])
         self.assertEqual(written["authors"][0]["githubUserId"], "1")
+
+    def test_successful_submission_creates_publisher_check_run(self):
+        status, payload = self._submit()
+        self.assertEqual(status, 201)
+        self.assertTrue(self.mock.check_runs)
+        run = self.mock.check_runs[-1]
+        self.assertEqual(run["name"], "package-validation")
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(run["conclusion"], "success")
+        self.assertEqual(run["head_sha"], "head-sha")
+        self.assertEqual(run["app"]["id"], 123)
+        self.assertTrue(run["external_id"].startswith("neurolingsce-submission:"))
+        self.assertTrue(run["external_id"].endswith(":head-sha"))
 
     def test_github_token_in_metadata_is_rejected(self):
         metadata = metadata_for()
@@ -862,6 +1039,8 @@ class FaultInjectionTest(unittest.TestCase):
         os.environ["GITHUB_PUBLISHER_APP_ID"] = "123"
         os.environ["GITHUB_PUBLISHER_INSTALLATION_ID"] = "1"
         os.environ["GITHUB_PUBLISHER_PRIVATE_KEY_PATH"] = str(self.root / "dummy-key.pem")
+        os.environ["GITHUB_OWNER"] = "owner"
+        os.environ["GITHUB_REPO"] = "repo"
         os.environ["SUBMISSION_STORAGE_DIR"] = str(self.root / "data")
         os.environ["SUBMISSION_ENV"] = "development"
         (self.root / "dummy-key.pem").write_text("dummy", encoding="utf-8")
@@ -882,7 +1061,7 @@ class FaultInjectionTest(unittest.TestCase):
         class Uploaded:
             file_name = "sample.mascot"
             content_type = "application/octet-stream"
-            size = 0
+            size = self.valid.stat().st_size
             temp_path = self.valid
         class Fields:
             def __init__(self, text):
@@ -947,6 +1126,131 @@ class FaultInjectionTest(unittest.TestCase):
         result, _ = self._submit("pr-key")
         self.assertEqual(result["status"], "pending")
         self.assertEqual(result["pr"]["number"], 7)
+
+    def _manifest_for_check(self, mid: str = "sample",
+                            version: str = "1.0.0",
+                            release_id: int = 42,
+                            asset_id: int = 99) -> dict:
+        package_bytes = self.fake.asset_bytes or self.valid.read_bytes()
+        return {
+            "id": mid,
+            "version": version,
+            "submissionId": "ab" * 12,
+            "release": {
+                "releaseId": release_id,
+                "assetId": asset_id,
+                "tag": f"draft/{mid}-{version}",
+            },
+            "package": {
+                "fileName": "sample.mascot",
+                "sha256": hashlib.sha256(package_bytes).hexdigest(),
+                "size": len(package_bytes),
+            },
+        }
+
+    def test_check_run_success_flow(self):
+        result, _ = self._submit("check-ok-key")
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(result["checkRun"]["name"], "package-validation")
+        self.assertEqual(
+            result["checkRun"]["externalId"],
+            f"neurolingsce-submission:{result['id']}:head-sha",
+        )
+        self.assertEqual(result["checkRun"]["headSha"], "head-sha")
+        run = self.fake.check_runs[-1]
+        self.assertEqual(run["conclusion"], "success")
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(run["app"]["id"], 123)
+        self.assertNotIn("token", json.dumps(run.get("output", {})).lower())
+
+    def test_check_run_resume_reuses_existing(self):
+        self.fake.fail_next("download_release_asset")
+        with self.assertRaises(ServiceError) as ctx:
+            self._submit("check-resume-key")
+        self.assertEqual(ctx.exception.status, 502)
+        stored_id = self.service._find_by_idempotency(
+            hashlib.sha256(b"check-resume-key").hexdigest()
+        )["id"]
+        stored = self.service.store.load(stored_id)
+        self.assertNotEqual(stored["status"], "failed")
+        self.assertNotEqual(stored["steps"].get("checkrun"), "done")
+        self.assertEqual(
+            sum(1 for name, _ in self.fake.calls if name == "create_check_run"),
+            1,
+        )
+        result, _ = self._submit("check-resume-key")
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(
+            sum(1 for name, _ in self.fake.calls if name == "create_check_run"),
+            1,
+        )
+        self.assertEqual(result["checkRun"]["id"], stored["checkRun"]["id"])
+        self.assertEqual(self.fake.check_runs[-1]["conclusion"], "success")
+
+    def test_check_run_failure_conclusion(self):
+        self.fake.asset_sha_mismatch = True
+        with self.assertRaises(ServiceError) as ctx:
+            self._submit("check-fail-key")
+        self.assertEqual(ctx.exception.code, "package_validation_failed")
+        stored_id = self.service._find_by_idempotency(
+            hashlib.sha256(b"check-fail-key").hexdigest()
+        )["id"]
+        stored = self.service.store.load(stored_id)
+        self.assertEqual(stored["status"], "failed")
+        run = self.fake.check_runs[-1]
+        self.assertEqual(run["conclusion"], "failure")
+        self.assertEqual(run["status"], "completed")
+        output = json.dumps(run.get("output", {}))
+        self.assertNotIn("SUBMISSION_SESSION_SECRET", output)
+        self.assertNotIn("installation-token", output)
+
+    def test_check_run_fails_when_pr_head_sha_changes(self):
+        self.fake.pr_head_sha_seq = ["head-sha", "changed-sha"]
+        with self.assertRaises(ServiceError) as ctx:
+            self._submit("check-head-key")
+        self.assertEqual(ctx.exception.code, "package_validation_failed")
+        run = self.fake.check_runs[-1]
+        self.assertEqual(run["conclusion"], "failure")
+
+    def test_check_run_fails_on_release_asset_mismatch(self):
+        submission = {
+            "id": "ab" * 12,
+            "pr": {"number": 7},
+            "steps": {},
+        }
+        self.fake.asset = {
+            "id": 999,
+            "name": "sample.mascot",
+            "state": "uploaded",
+        }
+        with self.assertRaises(ServiceError) as ctx:
+            self.service._run_package_validation_check(
+                "installation-token", submission,
+                self._manifest_for_check(),
+                "mascots/sample/manifest.json",
+                "sample", "1.0.0", "head-sha",
+            )
+        self.assertEqual(ctx.exception.code, "package_validation_failed")
+        run = self.fake.check_runs[-1]
+        self.assertEqual(run["conclusion"], "failure")
+        self.assertEqual(submission["status"], "failed")
+
+    def test_check_run_fails_when_release_not_draft(self):
+        submission = {
+            "id": "ab" * 12,
+            "pr": {"number": 7},
+            "steps": {},
+        }
+        self.fake.release_draft = False
+        with self.assertRaises(ServiceError) as ctx:
+            self.service._run_package_validation_check(
+                "installation-token", submission,
+                self._manifest_for_check(),
+                "mascots/sample/manifest.json",
+                "sample", "1.0.0", "head-sha",
+            )
+        self.assertEqual(ctx.exception.code, "package_validation_failed")
+        self.assertEqual(self.fake.check_runs[-1]["conclusion"], "failure")
 
     def test_non_retryable_failure_compensates(self):
         self.fake.fail_next(
@@ -1133,6 +1437,40 @@ class ProductionValidatorTest(unittest.TestCase):
         ok, errors = run_external_validator(self.valid, str(wrapper))
         self.assertFalse(ok)
         self.assertTrue(all("\x1b" not in error for error in errors))
+
+    def test_validator_environment_is_scrubbed(self):
+        os.environ["SUBMISSION_SESSION_SECRET"] = "b" * 64
+        os.environ["GITHUB_PUBLISHER_PRIVATE_KEY_PATH"] = "C:/secret/key.pem"
+        os.environ["GITHUB_PUBLISHER_APP_ID"] = "123"
+        os.environ["GITHUB_PUBLISHER_INSTALLATION_ID"] = "1"
+        os.environ["GITHUB_TOKEN"] = "gho_secret-token-value"
+        os.environ["AUTHORIZATION"] = "Bearer secret"
+        os.environ["COOKIE"] = "session=secret"
+        if platform.system() == "Windows":
+            body = (
+                'powershell -NoProfile -Command '
+                '"$keys = (Get-ChildItem Env:).Name; '
+                '$obj = @{ ok = $true; envKeys = $keys }; '
+                '$obj | ConvertTo-Json -Compress"'
+            )
+        else:
+            body = (
+                "python3 -c 'import json,os; "
+                'print(json.dumps({"ok": True, "envKeys": list(os.environ)}))\''
+            )
+        wrapper = make_validator_wrapper(self.root, body)
+        ok, errors, report = run_external_validator_detailed(
+            self.valid, str(wrapper)
+        )
+        self.assertTrue(ok, errors)
+        keys = [key.upper() for key in report.get("envKeys", [])]
+        self.assertFalse(any(
+            pattern in key
+            for key in keys
+            for pattern in (
+                "TOKEN", "SECRET", "AUTHORIZATION", "COOKIE", "PRIVATE_KEY",
+            )
+        ))
 
     def test_production_never_falls_back_without_validator(self):
         config = self._config("")

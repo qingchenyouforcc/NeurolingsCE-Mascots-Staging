@@ -23,8 +23,35 @@ from pathlib import Path
 
 MAX_LIST_PAGES = 20
 MAX_LIST_ITEMS = 5000
+MAX_DOWNLOAD_BYTES = 110 * 1024 * 1024
+MAX_REDIRECTS = 5
 # Test-only override; production requires https Link URLs on the same host.
 _ALLOW_INSECURE_LINKS = False
+# Test-only override; production rejects non-HTTPS asset redirects.
+_ALLOW_INSECURE_DOWNLOADS = False
+
+
+class _SensitiveStripRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow asset redirects but never forward sensitive headers cross-host."""
+
+    SENSITIVE_HEADERS = ("Authorization", "Cookie", "Proxy-Authorization")
+    max_redirects = MAX_REDIRECTS
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_request = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_request is None:
+            return None
+        old_host = urllib.parse.urlsplit(req.full_url).netloc
+        new_host = urllib.parse.urlsplit(newurl).netloc
+        if (
+            urllib.parse.urlsplit(newurl).scheme != "https"
+            and not _ALLOW_INSECURE_DOWNLOADS
+        ):
+            return None
+        if new_host != old_host:
+            for name in self.SENSITIVE_HEADERS:
+                new_request.remove_header(name)
+        return new_request
 
 class GitHubApiError(RuntimeError):
     def __init__(self, code: str, message: str, status: int = 0,
@@ -253,6 +280,133 @@ class GitHubClient:
             for page in self._request_paged(url, token)
             for item in page
         ]
+
+    def download_release_asset(self, token: str, release_id: int, asset_id: int,
+                               dest: Path, expected_sha256: str,
+                               expected_size: int | None = None) -> None:
+        """Download a (possibly draft) asset through the authenticated API.
+
+        Streams with a size cap, verifies SHA-256 (and size when given) and
+        deletes the destination on any failure. Sensitive headers are never
+        forwarded to a different host.
+        """
+        if not re.match(r"^[0-9a-f]{64}$", expected_sha256):
+            raise GitHubApiError(
+                "asset_sha256_invalid",
+                "expected SHA-256 must be 64 lowercase hex chars",
+            )
+        url = (
+            f"{self.api_base}/repos/{self.owner}/{self.repo}/releases/assets/"
+            f"{asset_id}"
+        )
+        request = urllib.request.Request(url, method="GET")
+        request.add_header("Authorization", f"Bearer {token}")
+        request.add_header("Accept", "application/octet-stream")
+        request.add_header("X-GitHub-Api-Version", "2022-11-28")
+        opener = urllib.request.build_opener(_SensitiveStripRedirectHandler())
+        hasher = hashlib.sha256()
+        written = 0
+        try:
+            with opener.open(request, timeout=120) as response, dest.open("wb") as out:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > MAX_DOWNLOAD_BYTES:
+                        raise GitHubApiError(
+                            "asset_too_large",
+                            "downloaded asset exceeds the size limit",
+                        )
+                    hasher.update(chunk)
+                    out.write(chunk)
+        except Exception:
+            dest.unlink(missing_ok=True)
+            raise
+        actual = hasher.hexdigest()
+        if actual.lower() != expected_sha256.lower():
+            dest.unlink(missing_ok=True)
+            raise GitHubApiError(
+                "asset_sha256_mismatch",
+                "downloaded asset SHA-256 does not match the manifest",
+            )
+        if expected_size is not None and written != expected_size:
+            dest.unlink(missing_ok=True)
+            raise GitHubApiError(
+                "asset_size_mismatch",
+                f"downloaded asset size {written} does not match {expected_size}",
+            )
+
+    def get_pull_request(self, token: str, pr_number: int) -> dict:
+        url = (
+            f"{self.api_base}/repos/{self.owner}/{self.repo}/pulls/"
+            f"{pr_number}"
+        )
+        return self._request("GET", url, token)
+
+    def get_check_runs_for_head(self, token: str, head_sha: str) -> list[dict]:
+        url = (
+            f"{self.api_base}/repos/{self.owner}/{self.repo}/commits/"
+            f"{head_sha}/check-runs?per_page=100"
+        )
+        runs: list[dict] = []
+        visited: set[str] = set()
+        page_number = 0
+        while url is not None:
+            if url in visited:
+                raise GitHubApiError(
+                    "github_pagination_cycle",
+                    "pagination Link cycle detected",
+                )
+            visited.add(url)
+            page_number += 1
+            if page_number > MAX_LIST_PAGES:
+                raise GitHubApiError(
+                    "github_pagination_overflow",
+                    f"pagination exceeded {MAX_LIST_PAGES} pages",
+                )
+            data, response_headers = self._request_full("GET", url, token)
+            if (not isinstance(data, dict)
+                    or not isinstance(data.get("check_runs"), list)):
+                raise GitHubApiError(
+                    "github_api_invalid",
+                    "check-runs response is malformed",
+                )
+            runs.extend(data["check_runs"])
+            url = self._parse_link_next(
+                response_headers.get("Link", ""), url
+            )
+        return runs
+
+    def create_check_run(self, token: str, head_sha: str, name: str,
+                         external_id: str, output: dict | None = None) -> dict:
+        url = f"{self.api_base}/repos/{self.owner}/{self.repo}/check-runs"
+        payload: dict = {
+            "name": name,
+            "head_sha": head_sha,
+            "status": "in_progress",
+            "external_id": external_id,
+        }
+        if output:
+            payload["output"] = output
+        return self._request("POST", url, token, payload)
+
+    def update_check_run(self, token: str, check_run_id: int,
+                         status: str | None = None,
+                         conclusion: str | None = None,
+                         output: dict | None = None) -> dict:
+        url = (
+            f"{self.api_base}/repos/{self.owner}/{self.repo}/check-runs/"
+            f"{check_run_id}"
+        )
+        payload: dict = {}
+        if status:
+            payload["status"] = status
+        if conclusion:
+            payload["conclusion"] = conclusion
+        if output:
+            payload["output"] = output
+        return self._request("PATCH", url, token, payload)
 
     def get_installation_token(self, app_id: str, installation_id: str,
                                private_key_pem: str) -> str:

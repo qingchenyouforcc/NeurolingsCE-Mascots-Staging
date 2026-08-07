@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -24,7 +25,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from github_client import GitHubApiError, GitHubClient  # noqa: E402
 from multipart import MultipartError, parse_multipart  # noqa: E402
-from package_checks import validate_mascot, validator_self_check  # noqa: E402
+from package_checks import (  # noqa: E402
+    validate_mascot,
+    validate_mascot_detailed,
+    validator_self_check,
+)
 from redact import redact_headers, redact_text  # noqa: E402
 
 ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -732,6 +737,35 @@ class SubmissionService:
                     422,
                 )
 
+            pr_view = self.github.get_pull_request(
+                token_app, submission["pr"]["number"]
+            )
+            head = pr_view.get("head") or {}
+            head_sha = head.get("sha", "")
+            head_repo = (head.get("repo") or {}).get("full_name", "")
+            if not isinstance(head_sha, str) or not head_sha:
+                raise ServiceError(
+                    "submission_failed", "PR head SHA is missing", 502
+                )
+            if head_repo != f"{self.config.owner}/{self.config.repo}":
+                raise ServiceError(
+                    "untrusted_changes",
+                    "PR head repository is not the official repository",
+                    422,
+                )
+            submission["pr"]["headSha"] = head_sha
+            submission["pr"]["headRepo"] = head_repo
+            self.store.save(submission)
+
+            if submission["steps"].get("checkrun") != "done":
+                self._run_package_validation_check(
+                    token_app, submission, manifest, manifest_path, mid,
+                    version, head_sha,
+                )
+                submission["steps"]["checkrun"] = "done"
+                submission["status"] = "package_validated"
+                self.store.save(submission)
+
             submission["status"] = "pending"
             submission["updatedAt"] = datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"
@@ -1122,6 +1156,253 @@ class SubmissionService:
                 if existing is not None:
                     return existing
             raise
+
+    def _fail_submission(self, submission: dict, code: str, message: str,
+                         details=None) -> None:
+        submission["status"] = "failed"
+        error: dict = {
+            "code": code,
+            "message": _clean_text(redact_text(message), 1000),
+        }
+        if details is not None:
+            if isinstance(details, list):
+                error["details"] = [
+                    _clean_text(redact_text(str(item)), 500)
+                    for item in details
+                ]
+            else:
+                error["details"] = _clean_text(
+                    redact_text(str(details)), 500
+                )
+        submission["error"] = error
+        submission["updatedAt"] = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        self.store.save(submission)
+
+    def _complete_check_run(self, token_app: str, check_run_id: int,
+                            conclusion: str, summary: str) -> None:
+        try:
+            self.github.update_check_run(
+                token_app, check_run_id,
+                status="completed", conclusion=conclusion,
+                output={
+                    "title": "Mascot package validation",
+                    "summary": _clean_text(
+                        summary, 65535, keep_newlines=True
+                    ),
+                },
+            )
+        except GitHubApiError as exc:
+            LOGGER.error(
+                "check run update failed: %s", redact_text(str(exc))
+            )
+
+    def _run_package_validation_check(self, token_app: str, submission: dict,
+                                      manifest: dict, manifest_path: str,
+                                      mid: str, version: str,
+                                      head_sha: str) -> None:
+        """Create/update the Publisher App package-validation Check Run.
+
+        The check is bound to the final PR head SHA; on any failure the run
+        is completed with conclusion=failure and the submission is failed.
+        Retries with the same idempotency key reuse the existing check run
+        (identified by name + external id on the same head SHA).
+        """
+        submission_id = submission["id"]
+        external_id = f"neurolingsce-submission:{submission_id}:{head_sha}"
+        check_run_id: int | None = None
+        try:
+            existing = [
+                run for run in self.github.get_check_runs_for_head(
+                    token_app, head_sha
+                )
+                if run.get("name") == "package-validation"
+                and run.get("external_id") == external_id
+            ]
+            if existing:
+                check_run_id = existing[0].get("id")
+            else:
+                created = self.github.create_check_run(
+                    token_app, head_sha, "package-validation", external_id
+                )
+                check_run_id = created.get("id")
+            if not isinstance(check_run_id, int):
+                raise ServiceError(
+                    "package_validation_failed",
+                    "check run was created without an id",
+                    502,
+                )
+            submission["checkRun"] = {
+                "id": check_run_id,
+                "name": "package-validation",
+                "externalId": external_id,
+                "headSha": head_sha,
+            }
+            self.store.save(submission)
+        except (GitHubApiError, ServiceError) as exc:
+            self._fail_submission(
+                submission, "package_validation_failed",
+                "package-validation check run could not be created; the PR "
+                "stays unmergeable; retry with the same idempotency key",
+            )
+            raise ServiceError(
+                "package_validation_failed",
+                "package-validation check run could not be created; retry "
+                "with the same idempotency key",
+                502,
+            ) from exc
+
+        try:
+            self._verify_and_revalidate_package(
+                token_app, submission, manifest, manifest_path, mid, version,
+                head_sha, check_run_id,
+            )
+        except ServiceError as exc:
+            details = exc.details if isinstance(exc.details, list) else []
+            summary = (
+                f"Submission {submission_id} mascot {mid} {version} failed: "
+                f"{exc.code}"
+            )
+            if details:
+                summary += " — " + "; ".join(str(item) for item in details)
+            self._complete_check_run(token_app, check_run_id, "failure", summary)
+            self._fail_submission(submission, exc.code, str(exc), details)
+            raise
+
+    def _verify_and_revalidate_package(self, token_app: str, submission: dict,
+                                       manifest: dict, manifest_path: str,
+                                       mid: str, version: str, head_sha: str,
+                                       check_run_id: int) -> None:
+        """Download the exact draft asset and revalidate it with the CLI."""
+        meta = manifest.get("release") or {}
+        release_id = meta.get("releaseId")
+        asset_id = meta.get("assetId")
+        tag = meta.get("tag", "")
+        package = manifest.get("package") or {}
+        file_name = package.get("fileName", "")
+        sha256 = package.get("sha256", "")
+        size = package.get("size", 0)
+        if not isinstance(release_id, int) or not isinstance(asset_id, int):
+            raise ServiceError(
+                "package_validation_failed",
+                "manifest release.releaseId/assetId must be integers",
+                422,
+            )
+        if not isinstance(tag, str) or tag != f"draft/{mid}-{version}":
+            raise ServiceError(
+                "package_validation_failed",
+                "manifest release.tag does not match the submission",
+                422,
+            )
+        if not isinstance(file_name, str) or not FILE_NAME_RE.match(file_name):
+            raise ServiceError(
+                "package_validation_failed",
+                "manifest package.fileName is invalid",
+                422,
+            )
+        if not isinstance(sha256, str) or not re.match(
+            r"^[0-9a-f]{64}$", sha256
+        ):
+            raise ServiceError(
+                "package_validation_failed",
+                "manifest package.sha256 is invalid",
+                422,
+            )
+        if not isinstance(size, int) or size < 1:
+            raise ServiceError(
+                "package_validation_failed",
+                "manifest package.size is invalid",
+                422,
+            )
+
+        release = self.github.get_release(token_app, release_id)
+        if release is None or release.get("draft") is not True:
+            raise ServiceError(
+                "package_validation_failed",
+                "release is not an existing draft",
+                422,
+            )
+        if release.get("tag_name") != tag:
+            raise ServiceError(
+                "package_validation_failed",
+                "release tag does not match the manifest",
+                422,
+            )
+        assets = self.github.get_release_assets(token_app, release_id)
+        asset = next(
+            (item for item in assets if item.get("id") == asset_id), None
+        )
+        if (asset is None or asset.get("name") != file_name
+                or asset.get("state") != "uploaded"):
+            raise ServiceError(
+                "package_validation_failed",
+                "asset does not match the manifest",
+                422,
+            )
+
+        pr = self.github.get_pull_request(
+            token_app, submission["pr"]["number"]
+        )
+        current_head = (pr.get("head") or {}).get("sha", "")
+        if pr.get("state") != "open" or current_head != head_sha:
+            raise ServiceError(
+                "package_validation_failed",
+                "PR head SHA changed during validation",
+                422,
+            )
+        files = self.github.get_pull_request_files(
+            token_app, submission["pr"]["number"]
+        )
+        if files != [manifest_path]:
+            raise ServiceError(
+                "package_validation_failed",
+                "PR changed files changed during validation",
+                422,
+            )
+
+        with tempfile.TemporaryDirectory(prefix="neurolingsce-check-") as tmp:
+            dest = Path(tmp) / file_name
+            try:
+                self.github.download_release_asset(
+                    token_app, release_id, asset_id, dest, sha256, size
+                )
+            except GitHubApiError as exc:
+                if exc.retryable:
+                    raise
+                raise ServiceError(
+                    "package_validation_failed",
+                    f"draft asset download failed: {exc.code}",
+                    422,
+                ) from exc
+            ok, errors, report = validate_mascot_detailed(
+                dest,
+                self.config.validator_cli,
+                self.config.submission_env,
+                self.config.validator_timeout_seconds,
+            )
+            if not ok:
+                raise ServiceError(
+                    "package_validation_failed",
+                    "package revalidation failed",
+                    422,
+                    errors,
+                )
+            if (report.get("package_version") is not None
+                    and report.get("package_version") != version):
+                raise ServiceError(
+                    "package_validation_failed",
+                    "validator identified a package version that does not "
+                    "match the manifest",
+                    422,
+                )
+
+        self._complete_check_run(
+            token_app, check_run_id, "success",
+            f"Submission {submission['id']} mascot {mid} {version} "
+            f"validated: size {size} bytes; sha256 {sha256[:12]}…; "
+            f"validator ok",
+        )
 
     def _build_manifest(self, metadata: dict, mid: str, version: str,
                         sha256: str, uploaded, content_type: str,
