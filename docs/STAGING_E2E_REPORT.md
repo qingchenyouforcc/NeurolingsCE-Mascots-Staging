@@ -205,3 +205,82 @@ Publisher 私钥、session secret、签名下载 URL。
 4. 部署 HTTPS 投稿服务（或授权 localhost production 验证继续）。
 
 维护者完成后，下一轮即可从“最小 Check Run 探针”继续。
+
+---
+
+## 追加：真实 E2E 执行轮（2026-08-07）
+
+### GitHub Apps（真实验证）
+
+- Login App：存在；Device Flow **真实通过**（device code → user_code →
+  浏览器授权 → polling → access token → `GET /user`）；权限为 None
+  （按创建配置）；Client ID 已配置到测试脚本（未写入仓库）。
+- Publisher App：存在，App ID `4513799`，Installation ID
+  `151870713`（用 App JWT 自动发现）；installation token 权限实测：
+  `checks: write`、`contents: write`、`metadata: read`、
+  `pull_requests: write`；`GET /installation/repositories` 仅返回
+  `qingchenyouforcc/NeurolingsCE-Mascots-Staging`。
+
+### Check Run 探针（真实）
+
+| PR | head SHA | Check Run ID | app.id | conclusion |
+| --- | --- | --- | --- | --- |
+| 3 | `1c65672a…` | `92779927906` | 4513799 | success |
+| 3（SHA B） | `4d0facc9…` | `92780770673` | 4513799 | success |
+| 4（正式投稿） | `0992e9e9…` | `92784208491` | 4513799 | success |
+
+### 防冒充（真实）
+
+- A：Publisher 在 PR #3 head 创建成功 check，rollup=SUCCESS（required
+  checks 满足；仅 review 阻塞，单账号 staging）。
+- B：SHA A→B 后，SHA B 上无 `package-validation`（旧 check 未跟随）；
+  Publisher 为 SHA B 重新创建 success 后恢复。
+- C：用用户 PAT 在 SHA C 创建同名 commit status `package-validation`
+  = success；SHA C 的 check-runs 仍只有 registry-checks，无
+  `package-validation` check-run → 不能满足绑定 app_id 4513799 的
+  required check。
+
+### Branch protection（真实确认）
+
+`registry-checks → app_id 15368`；`package-validation → app_id
+4513799`；strict=true；review ×1；force push/deletion=false；
+`enforce_admins=false`（staging）。
+
+### Device Flow / 投稿服务（真实）
+
+- Device Flow：**Passed**（login `qingchenyouforcc`，numeric user ID
+  `90140161`；未记录任何 token）。
+- 服务：localhost production（HTTPS 未部署 → 服务 staging 仍标记
+  Not deployed）；`/healthz` ok；validator 自检通过；Publisher
+  installation token 签发成功；持久存储使用中；日志无敏感值。
+
+### 正式投稿（真实）
+
+- submission `a798811599c24c46876aeef3`；PR #4；
+  Release `366547997`（draft=true）；Asset `504731806`
+  （`staging-e2e-0.1.0.mascot`，664 字节，SHA-256
+  `3429e7880265fec0aa231a342660ce1cbb785d5bf4dcd3d0192df7328bf5af99`，
+  与本地文件一致）。
+- `package-validation`（app 4513799）success；`registry-checks`
+  （app 15368）success。
+- Merge：PR #4 合并（mergeCommit `07b093d1…`），使用 **staging-only
+  管理员 bypass**（单账号无法 self-review，`enforce_admins=false`），
+  不作为生产 review 验证。
+
+### 发布二次验证（真实，fail closed）
+
+- run `31152334227`（push）：publish_releases 下载真实 draft asset、
+  SHA-256 一致，随后真实 `NeurolingsCE-cli` 校验**失败**：
+  公开仓库 `qingchenyouforcc/NeurolingsCE` main 构建的 CLI 不支持
+  `--mascot validate`（`invalid_arguments`；本地工作树已实现但未推送）。
+- 结果：Release `366547997` 保持 `draft=true`；索引与 Pages 未更新
+  （仍为 04:40 空索引）。这是按设计的 fail closed——未验证 asset
+  不能发布。
+
+### 阻塞点（需维护者决策）
+
+1. 将本地 `NeurolingsCE` 工作树中的 CLI validator（`--mascot
+   validate`）提交并推送到 `qingchenyouforcc/NeurolingsCE` main；或
+2. 将 staging 仓库变量 `VALIDATOR_REPO` 指向已含该命令的公开仓库/分支；
+   然后 `workflow_dispatch` 重跑 publish-and-deploy（Release 仍为
+   draft，重跑将完成验证并发布）。
