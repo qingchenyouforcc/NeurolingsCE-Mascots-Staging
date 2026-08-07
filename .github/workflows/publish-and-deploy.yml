@@ -28,7 +28,7 @@ jobs:
         run: python3 tools/validate_registry.py . --json
       - name: Build public validator from NeurolingsCE
         run: |
-          git clone --depth 1 \
+          git clone --depth 1 --recurse-submodules \
             https://github.com/${{ vars.VALIDATOR_REPO || 'qingchenyouforcc/NeurolingsCE' }}.git \
             /tmp/neurolingsce
           sudo apt-get update -qq
