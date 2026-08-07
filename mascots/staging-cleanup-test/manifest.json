@@ -1,0 +1,46 @@
+{
+  "authors": [
+    {
+      "displayName": "Qing Chenyou",
+      "githubLogin": "qingchenyouforcc",
+      "githubUserId": "90140161"
+    }
+  ],
+  "categories": [],
+  "createdAt": "2026-08-07T07:53:11Z",
+  "description": "Copyright-free synthetic mascot for the cleanup E2E.",
+  "id": "staging-cleanup-test",
+  "isDerivative": false,
+  "license": "MIT",
+  "maintainerUserIds": [
+    "90140161"
+  ],
+  "maintainers": [
+    "qingchenyouforcc"
+  ],
+  "minimumNeurolingsCEVersion": "0.5.1",
+  "name": "Staging Cleanup Test",
+  "owner": {
+    "login": "qingchenyouforcc",
+    "userId": "90140161"
+  },
+  "package": {
+    "contentType": "application/octet-stream",
+    "fileName": "staging-cleanup-test-0.1.0.mascot",
+    "sha256": "a733b13c465f25ed5ac19cbb6c19421db4f3c9ed7f9db96abd8eea4530a26b3f",
+    "size": 680,
+    "url": "https://github.com/qingchenyouforcc/NeurolingsCE-Mascots-Staging/releases/download/draft/staging-cleanup-test-0.1.0/staging-cleanup-test-0.1.0.mascot"
+  },
+  "release": {
+    "assetId": 504851300,
+    "releaseId": 366596003,
+    "tag": "draft/staging-cleanup-test-0.1.0"
+  },
+  "schemaVersion": "1",
+  "submissionId": "394fc1d583584d9e9f6a5893",
+  "summary": "Synthetic cleanup-test mascot",
+  "tags": [],
+  "updatedAt": "2026-08-07T07:53:11Z",
+  "upstream": "",
+  "version": "0.1.0"
+}
