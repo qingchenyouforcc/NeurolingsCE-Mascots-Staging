@@ -14,6 +14,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from registry_checks import validate_manifest_object
+
 SAFE_DOWNLOAD_HOSTS = ("github.com", "objects.githubusercontent.com")
 MAX_DOWNLOAD_BYTES = 110 * 1024 * 1024
 MAX_REDIRECTS = 5
@@ -36,12 +38,49 @@ SUBMISSION_BRANCH_RE = re.compile(
 MANIFEST_PATH_RE = re.compile(
     r"^mascots/([a-z0-9]+(?:-[a-z0-9]+)*)/manifest\.json$"
 )
+SEMVER_RE = re.compile(
+    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+    r"(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$"
+)
+RESERVED_IDS = {
+    ".github", "mascots", "docs", "tools", "schemas", "generated",
+    "submission-service", "examples", "con", "prn", "aux", "nul",
+    "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7",
+    "lpt8", "lpt9",
+}
 
 
 class WorkflowApiError(RuntimeError):
     def __init__(self, message: str, status: int = 0):
         super().__init__(message)
         self.status = status
+
+
+def semver_gt(left: str, right: str) -> bool:
+    """Strict SemVer precedence (build metadata ignored)."""
+    def parts(value: str) -> tuple:
+        match = SEMVER_RE.match(value)
+        if not match:
+            raise ValueError(f"invalid SemVer: {value!r}")
+        return (
+            int(match.group(1)),
+            int(match.group(2)),
+            int(match.group(3)),
+            match.group(5) or None,
+        )
+
+    l_major, l_minor, l_patch, l_pre = parts(left)
+    r_major, r_minor, r_patch, r_pre = parts(right)
+    if (l_major, l_minor, l_patch) != (r_major, r_minor, r_patch):
+        return (l_major, l_minor, l_patch) > (r_major, r_minor, r_patch)
+    if l_pre is None and r_pre is None:
+        return False
+    if l_pre is None:
+        return True
+    if r_pre is None:
+        return False
+    return l_pre < r_pre
 
 
 class _SensitiveStrippingRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -437,6 +476,16 @@ def delete_release(token: str, owner: str, repo: str, release_id: int) -> None:
             raise
 
 
+def delete_branch_ref(token: str, owner: str, repo: str, branch: str) -> None:
+    quoted = urllib.parse.quote(f"heads/{branch}", safe="/")
+    url = f"https://api.github.com/repos/{owner}/{repo}/git/ref/{quoted}"
+    try:
+        github_request("DELETE", url, token)
+    except WorkflowApiError as exc:
+        if exc.status != 404:
+            raise
+
+
 def verify_and_cleanup_submission_pr(token: str, owner: str, repo: str,
                                      pr_number: int) -> dict:
     """Verify a closed PR is a server-shaped submission and delete its draft release.
@@ -526,10 +575,151 @@ def verify_and_cleanup_submission_pr(token: str, owner: str, repo: str,
         return result
 
     delete_release(token, owner, repo, int(release_id))
+    delete_branch_ref(token, owner, repo, branch)
     result["verified"] = True
     result["deletedReleaseId"] = release_id
+    result["deletedBranch"] = branch
     result["branch"] = branch
     return result
+
+
+def verify_pr_registry_only(token: str, owner: str, repo: str,
+                            pr_number: int,
+                            repo_root: Path) -> dict:
+    """Registry-only PR validation (no Draft asset access).
+
+    Checks changed files, the manifest at the PR head SHA, registry schema
+    rules and id/version duplicates against the base tree. Never downloads
+    assets and never uses anything from the PR head except the manifest
+    content, which is read through the GitHub API.
+    """
+    pr = get_pull_request(token, owner, repo, pr_number)
+    if pr.get("state") != "open":
+        raise WorkflowApiError(
+            f"PR {pr_number} is not open (state={pr.get('state')!r})"
+        )
+    head = pr.get("head") or {}
+    head_repo = (head.get("repo") or {}).get("full_name", "")
+    if head_repo != f"{owner}/{repo}":
+        raise WorkflowApiError(
+            f"PR head repository {head_repo!r} is not {owner}/{repo}"
+        )
+    branch = head.get("ref", "")
+    match = SUBMISSION_BRANCH_RE.match(branch)
+    if not match:
+        raise WorkflowApiError(
+            f"PR head branch {branch!r} is not a server submission branch"
+        )
+    mascot_id = match.group(1)
+    version = match.group(2) + "." + match.group(3) + "." + match.group(4)
+    if match.group(5):
+        version += match.group(5)
+    if match.group(6):
+        version += match.group(6)
+    head_sha = head.get("sha", "")
+    if mascot_id in RESERVED_IDS:
+        raise WorkflowApiError(f"mascot id {mascot_id!r} is reserved")
+
+    changed_files_count = pr.get("changed_files")
+    files = get_pr_files(
+        token, owner, repo, pr_number,
+        expected_count=changed_files_count if isinstance(changed_files_count, int) else None,
+    )
+    paths = [entry.get("filename", "") for entry in files]
+    expected_path = f"mascots/{mascot_id}/manifest.json"
+    if paths != [expected_path]:
+        raise WorkflowApiError(
+            f"changed files are not exactly [{expected_path!r}]: {paths!r}"
+        )
+
+    manifest_entry = get_file_at_ref(token, owner, repo, expected_path, head_sha)
+    if manifest_entry is None:
+        raise WorkflowApiError("manifest not found at PR head SHA")
+    try:
+        manifest = json.loads(decode_contents(manifest_entry))
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise WorkflowApiError(f"manifest is not valid JSON: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise WorkflowApiError("manifest must be a JSON object")
+
+    errors = validate_manifest_object(manifest, path_hint=expected_path)
+    if errors:
+        raise WorkflowApiError("; ".join(errors))
+    if manifest.get("id") != mascot_id or manifest.get("version") != version:
+        raise WorkflowApiError("manifest id/version does not match the branch")
+    submission_id = manifest.get("submissionId", "")
+    if not isinstance(submission_id, str) or not SUBMISSION_ID_RE.match(submission_id):
+        raise WorkflowApiError("manifest submissionId is missing or invalid")
+    meta = manifest.get("release") or {}
+    release_id = meta.get("releaseId")
+    asset_id = meta.get("assetId")
+    if not isinstance(release_id, int) or not isinstance(asset_id, int):
+        raise WorkflowApiError("manifest release.releaseId/assetId must be integers")
+    if meta.get("tag") != f"draft/{mascot_id}-{version}":
+        raise WorkflowApiError(
+            f"manifest release.tag {meta.get('tag')!r} does not match "
+            f"draft/{mascot_id}-{version}"
+        )
+    package = manifest.get("package") or {}
+    file_name = package.get("fileName", "")
+    sha256 = package.get("sha256", "")
+    size = package.get("size", 0)
+    package_url = package.get("url", "")
+    if not isinstance(file_name, str) or not FILE_NAME_RE.match(file_name):
+        raise WorkflowApiError("manifest package.fileName is invalid")
+    if not isinstance(sha256, str) or not SHA256_RE.match(sha256):
+        raise WorkflowApiError("manifest package.sha256 is invalid")
+    if not isinstance(size, int) or size < 1:
+        raise WorkflowApiError("manifest package.size is invalid")
+    if (not isinstance(package_url, str)
+            or not package_url.startswith("https://github.com/")
+            or "/releases/download/" not in package_url):
+        raise WorkflowApiError(
+            "manifest package.url is not a GitHub release URL"
+        )
+
+    base_versions: dict[str, str] = {}
+    base_dir = repo_root / "mascots"
+    if base_dir.is_dir():
+        for manifest_path in sorted(base_dir.glob("*/manifest.json")):
+            try:
+                base_manifest = json.loads(
+                    manifest_path.read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(base_manifest, dict):
+                continue
+            base_id = base_manifest.get("id")
+            base_version = base_manifest.get("version")
+            if isinstance(base_id, str) and isinstance(base_version, str):
+                base_versions[base_id] = base_version
+    if mascot_id in base_versions:
+        existing_version = base_versions[mascot_id]
+        if existing_version == version:
+            raise WorkflowApiError(
+                f"id {mascot_id!r} version {version!r} already exists on main"
+            )
+        try:
+            higher = semver_gt(version, existing_version)
+        except ValueError:
+            raise WorkflowApiError("manifest version is not valid SemVer") from None
+        if not higher:
+            raise WorkflowApiError(
+                f"version {version!r} must be strictly higher than "
+                f"{existing_version!r} on main"
+            )
+
+    return {
+        "mascotId": mascot_id,
+        "version": version,
+        "submissionId": submission_id,
+        "releaseId": release_id,
+        "assetId": asset_id,
+        "tag": f"draft/{mascot_id}-{version}",
+        "headSha": head_sha,
+        "changedFiles": paths,
+    }
 
 
 def verify_pr_manifest_and_download_asset(token: str, owner: str, repo: str,

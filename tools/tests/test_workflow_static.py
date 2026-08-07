@@ -61,18 +61,33 @@ class WorkflowStaticTest(unittest.TestCase):
         self.assertIn("github.event.pull_request.base.sha", text)
         self.assertNotIn("github.event.pull_request.head.sha", text)
 
-    def test_pr_validation_never_anonymous_downloads(self):
+    def test_pr_validation_never_touches_draft_assets(self):
         text = "\n".join(workflow_lines("pr-validation.yml"))
-        self.assertIn("verify_pr_manifest_and_download_asset", text)
+        self.assertIn("verify_pr_registry_only", text)
+        self.assertNotIn("verify_pr_manifest_and_download_asset", text)
+        self.assertNotIn("download_release_asset", text)
+        self.assertNotIn("package-validation", text)
         self.assertNotIn('safe_download(meta["url"], ""', text)
         self.assertNotIn('safe_download(url, "",', text)
         self.assertNotIn('safe_download(meta["url"], "",', text)
+
+    def test_pr_validation_has_no_package_validation_job(self):
+        text = "\n".join(workflow_lines("pr-validation.yml"))
+        self.assertNotIn("package-validation:", text)
+        self.assertNotIn("Build public validator", text)
 
     def test_publish_workflow_does_not_push_main(self):
         text = "\n".join(workflow_lines("publish-and-deploy.yml"))
         for forbidden in ("git push", "git commit", "manifest_path.write_text"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)
+
+    def test_publish_workflow_revalidates_draft_before_publishing(self):
+        text = "\n".join(workflow_lines("publish-and-deploy.yml"))
+        self.assertIn("download_release_asset", text)
+        self.assertIn("cli_validate", text)
+        self.assertIn("publish_release", text)
+        self.assertIn("sys.exit(1)", text)
 
     def test_publish_and_deploy_job_chain(self):
         text = "\n".join(workflow_lines("publish-and-deploy.yml"))
@@ -109,12 +124,6 @@ class WorkflowStaticTest(unittest.TestCase):
                 self.assertIn("vars.REGISTRY_REPO", text)
                 self.assertIn("'qingchenyouforcc'", text)
                 self.assertIn("'NeurolingsCE-Mascots'", text)
-
-    def test_pr_validation_records_api_trace(self):
-        text = "\n".join(workflow_lines("pr-validation.yml"))
-        self.assertIn("api-trace.json", text)
-        self.assertIn("workflowEvent", text)
-        self.assertIn("jobPermissions", text)
 
     def test_cleanup_does_not_checkout_pr_code(self):
         text = "\n".join(workflow_lines("cleanup-submissions.yml"))

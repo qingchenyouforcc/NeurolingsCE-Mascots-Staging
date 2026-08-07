@@ -75,6 +75,9 @@ def submission_pr(**overrides) -> dict:
 def submission_manifest_full() -> dict:
     manifest = submission_manifest()
     manifest["submissionId"] = "ab" * 12
+    manifest["minimumNeurolingsCEVersion"] = "0.5.1"
+    manifest["createdAt"] = "2026-08-06T00:00:00Z"
+    manifest["updatedAt"] = "2026-08-06T00:00:00Z"
     manifest["package"] = {
         "fileName": "sample.mascot",
         "url": "https://github.com/owner/repo/releases/download/draft/sample-1.2.3/sample.mascot",
@@ -313,10 +316,12 @@ class WorkflowHelpersTest(unittest.TestCase):
                 200, {"id": 42, "tag_name": "draft/sample-1.2.3", "draft": True},
             ),
             ("DELETE", "/repos/owner/repo/releases/42"): (204, {}),
+            ("DELETE", "/repos/owner/repo/git/ref/heads/submission/sample-1.2.3"): (204, {}),
         })
         result = wh.verify_and_cleanup_submission_pr("t", "owner", "repo", 7)
         self.assertTrue(result["verified"])
         self.assertEqual(result["deletedReleaseId"], 42)
+        self.assertEqual(result["deletedBranch"], "submission/sample-1.2.3")
         self.assertTrue(any(m == "DELETE" for m, _ in self.calls))
 
 
@@ -511,6 +516,122 @@ class PrAssetValidationTest(unittest.TestCase):
             wh.verify_pr_manifest_and_download_asset(
                 "t", "owner", "repo", 7, self.dest
             )
+
+
+class PrRegistryOnlyTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.calls: list[tuple[str, str]] = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def install_fake(self, routes: dict):
+        def fake(method: str, url: str, token: str, payload: dict | None = None) -> dict:
+            self.calls.append((method, url))
+            key = (method, url)
+            handler = routes.get(key)
+            if handler is None:
+                candidates = [
+                    (route_key[1], route_handler)
+                    for route_key, route_handler in routes.items()
+                    if route_key[0] == method and route_key[1] in url
+                ]
+                if candidates:
+                    _, handler = max(candidates, key=lambda item: len(item[0]))
+            if handler is None:
+                raise wh.WorkflowApiError(f"no route for {method} {url}", 501)
+            if callable(handler):
+                return handler(method, url)
+            status, body = handler
+            if status == 404:
+                raise wh.WorkflowApiError("Not Found", 404)
+            return body
+
+        wh.github_request = fake  # type: ignore[assignment]
+        wh.github_request_with_headers = (  # type: ignore[assignment]
+            lambda method, url, token, payload=None: (fake(method, url, token, payload), {})
+        )
+
+    def _routes(self, pr=None, manifest=None):
+        pr = pr or submission_pr()
+        manifest = manifest or submission_manifest_full()
+        return {
+            ("GET", "/repos/owner/repo/pulls/7"): (200, pr),
+            ("GET", "/repos/owner/repo/pulls/7/files"): (
+                200, [{"filename": "mascots/sample/manifest.json"}],
+            ),
+            ("GET", "/repos/owner/repo/contents/mascots/sample/manifest.json"): (
+                200, encoded_manifest(manifest),
+            ),
+        }
+
+    def test_accepts_valid_registry_only_submission(self):
+        self.install_fake(self._routes())
+        result = wh.verify_pr_registry_only(
+            "t", "owner", "repo", 7, self.root
+        )
+        self.assertEqual(result["mascotId"], "sample")
+        self.assertEqual(result["version"], "1.2.3")
+        self.assertEqual(result["headSha"], "head-sha")
+        self.assertEqual(result["changedFiles"], ["mascots/sample/manifest.json"])
+
+    def test_rejects_extra_changed_file(self):
+        routes = self._routes()
+        routes[("GET", "/repos/owner/repo/pulls/7/files")] = (
+            200,
+            [{"filename": "mascots/sample/manifest.json"},
+             {"filename": ".github/workflows/evil.yml"}],
+        )
+        self.install_fake(routes)
+        with self.assertRaises(wh.WorkflowApiError):
+            wh.verify_pr_registry_only("t", "owner", "repo", 7, self.root)
+
+    def test_rejects_duplicate_id_version_on_main(self):
+        base = self.root / "mascots" / "sample" / "manifest.json"
+        base.parent.mkdir(parents=True)
+        base.write_text(json.dumps({
+            "id": "sample", "version": "1.2.3",
+        }), encoding="utf-8")
+        self.install_fake(self._routes())
+        with self.assertRaises(wh.WorkflowApiError) as ctx:
+            wh.verify_pr_registry_only("t", "owner", "repo", 7, self.root)
+        self.assertIn("already exists on main", str(ctx.exception))
+
+    def test_rejects_version_downgrade_against_main(self):
+        base = self.root / "mascots" / "sample" / "manifest.json"
+        base.parent.mkdir(parents=True)
+        base.write_text(json.dumps({
+            "id": "sample", "version": "2.0.0",
+        }), encoding="utf-8")
+        self.install_fake(self._routes())
+        with self.assertRaises(wh.WorkflowApiError) as ctx:
+            wh.verify_pr_registry_only("t", "owner", "repo", 7, self.root)
+        self.assertIn("strictly higher", str(ctx.exception))
+
+    def test_rejects_manifest_schema_violation(self):
+        manifest = submission_manifest_full()
+        del manifest["description"]
+        self.install_fake(self._routes(manifest=manifest))
+        with self.assertRaises(wh.WorkflowApiError):
+            wh.verify_pr_registry_only("t", "owner", "repo", 7, self.root)
+
+    def test_rejects_non_submission_branch(self):
+        self.install_fake(self._routes(pr=submission_pr(
+            head={"ref": "feature/evil", "sha": "s",
+                  "repo": {"full_name": "owner/repo"}}
+        )))
+        with self.assertRaises(wh.WorkflowApiError):
+            wh.verify_pr_registry_only("t", "owner", "repo", 7, self.root)
+
+    def test_rejects_release_metadata_format(self):
+        manifest = submission_manifest_full()
+        manifest["release"]["releaseId"] = "42"
+        self.install_fake(self._routes(manifest=manifest))
+        with self.assertRaises(wh.WorkflowApiError) as ctx:
+            wh.verify_pr_registry_only("t", "owner", "repo", 7, self.root)
+        self.assertIn("must be integers", str(ctx.exception))
 
 
 class PaginationTest(unittest.TestCase):
